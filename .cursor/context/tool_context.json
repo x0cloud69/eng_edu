@@ -1,0 +1,293 @@
+{
+  "_meta": {
+    "document": "Phase 3. Capability 구축 — 3.2.2 Tool Config",
+    "phase": "Phase 3 - Capability 구축",
+    "version": "v1.0",
+    "created_by": "KY Song",
+    "date": "2026",
+    "description": "Cursor AI가 Tool 코드 생성 시 참조하는 기준. Tool 분류, Agent별 Permission Matrix, Circuit Breaker, 호출 흐름 정의.",
+    "depends_on": [
+      "governance.json",
+      "governance_rules_context.json",
+      "workflow_context.json",
+      "skill_context.json",
+      "saas_foundation.json",
+      "phase3_context.json"
+    ],
+    "change_log": [
+      { "version": "v1.0", "date": "2026", "summary": "Phase 3 Tool Config 초기 생성" }
+    ]
+  },
+
+  "tool_registry": {
+    "description": "Tool Registry 구조. 모든 Tool은 이 레지스트리에 등록 후에만 사용 가능.",
+    "db_table": "tool_registry",
+    "columns": [
+      { "name": "id",               "type": "UUID",       "desc": "Tool 고유 ID" },
+      { "name": "tool_name",        "type": "VARCHAR",    "desc": "Tool 식별자 (예: db_write)" },
+      { "name": "tool_version",     "type": "VARCHAR",    "desc": "Tool 버전 (예: v1.0)" },
+      { "name": "tool_type",        "type": "VARCHAR",    "desc": "Internal / Agent / External" },
+      { "name": "description",      "type": "TEXT",       "desc": "Tool 목적 설명" },
+      { "name": "allowed_agents",   "type": "JSON",       "desc": "이 Tool을 사용할 수 있는 Agent 코드 목록" },
+      { "name": "requires_approval","type": "BOOLEAN",    "desc": "Human 승인 필요 여부" },
+      { "name": "risk_level",       "type": "VARCHAR",    "desc": "Tool 실행 Risk Level" },
+      { "name": "circuit_breaker",  "type": "JSON",       "desc": "Circuit Breaker 설정 (threshold, timeout, retry)" },
+      { "name": "audit_required",   "type": "BOOLEAN",    "desc": "audit_log 기록 필요 여부" },
+      { "name": "is_active",        "type": "BOOLEAN",    "desc": "활성화 여부" },
+      { "name": "created_at",       "type": "TIMESTAMPTZ","desc": "등록 시각" }
+    ],
+    "invocation_rules": [
+      "Tool은 Skill 또는 tool_registry.call()을 통해서만 호출 가능",
+      "Agent에서 Tool 직접 import/호출 절대 금지",
+      "allowed_agents 검증 → requires_approval 확인 → Risk 체크 → 실행 → audit_log 순서 필수",
+      "is_active=false Tool 호출 시 ToolDisabledException 발생",
+      "미등록 Tool 호출 시 ToolNotFoundException 발생"
+    ]
+  },
+
+  "tools": {
+    "internal_tools": {
+      "description": "내부 시스템 직접 접근 Tool. DB·파일·캐시 등 내부 리소스 대상.",
+      "tools": [
+        {
+          "tool_name": "db_query",
+          "tool_type": "Internal",
+          "description": "PostgreSQL SELECT 조회 전용 Tool. 데이터 변경 불가.",
+          "allowed_agents": ["Back-A", "Test-A", "Monitor-A", "Evol-A"],
+          "requires_approval": false,
+          "risk_level": "LOW",
+          "audit_required": false,
+          "circuit_breaker": { "failure_threshold": 5, "timeout_seconds": 30, "retry_count": 3 },
+          "constraints": [
+            "SELECT 쿼리만 허용 — INSERT/UPDATE/DELETE 감지 시 즉시 차단",
+            "모든 쿼리에 organization_id(tenant_id) 필터 자동 포함 필수",
+            "deleted_at IS NULL 필터 자동 포함 필수",
+            "audit_logs 테이블 SELECT만 허용 (UPDATE/DELETE 절대 금지)"
+          ],
+          "error_handling": "QueryException → Orch 에스컬레이션 (3회 실패 시)"
+        },
+        {
+          "tool_name": "db_write",
+          "tool_type": "Internal",
+          "description": "PostgreSQL INSERT/UPDATE(SoftDelete만) Tool. 트랜잭션 필수.",
+          "allowed_agents": ["Back-A"],
+          "requires_approval": true,
+          "risk_level": "HIGH",
+          "audit_required": true,
+          "circuit_breaker": { "failure_threshold": 3, "timeout_seconds": 60, "retry_count": 1 },
+          "constraints": [
+            "물리 DELETE(hard delete) 쿼리 절대 금지 → SoftDelete(deleted_at) 사용",
+            "audit_logs 테이블 UPDATE/DELETE 절대 금지",
+            "async with db.begin() 트랜잭션 블록 필수",
+            "G-06 Gate 승인 후에만 DB 스키마 변경 가능",
+            "organization_id(tenant_id) 포함 필수"
+          ],
+          "error_handling": "DBWriteException → 트랜잭션 롤백 → audit_log WRITE_FAILED 기록 → Orch 에스컬레이션"
+        },
+        {
+          "tool_name": "file_read",
+          "tool_type": "Internal",
+          "description": "허용된 디렉토리 내 파일 읽기 Tool.",
+          "allowed_agents": ["Back-A", "Front-A", "UIUX-A", "Evol-A", "Monitor-A", "Orch", "Test-A"],
+          "requires_approval": false,
+          "risk_level": "LOW",
+          "audit_required": false,
+          "circuit_breaker": { "failure_threshold": 5, "timeout_seconds": 10, "retry_count": 2 },
+          "constraints": [
+            "허용 디렉토리: /home/claude/, /mnt/user-data/outputs/",
+            "Sensitive/Restricted 파일 읽기 시 마스킹 적용",
+            ".env 파일 및 Secret 파일 읽기 금지"
+          ],
+          "error_handling": "FileReadException → 에러 로그 기록"
+        },
+        {
+          "tool_name": "file_write",
+          "tool_type": "Internal",
+          "description": "허용된 디렉토리에 파일 생성·수정 Tool. Human 승인 필수.",
+          "allowed_agents": ["Back-A", "Front-A"],
+          "requires_approval": true,
+          "risk_level": "MEDIUM",
+          "audit_required": true,
+          "circuit_breaker": { "failure_threshold": 3, "timeout_seconds": 30, "retry_count": 1 },
+          "constraints": [
+            "허용 디렉토리: /home/claude/, /mnt/user-data/outputs/",
+            ".cursor/context/ 디렉토리 write 절대 금지 (G-00-6)",
+            "P3 review_requests INSERT 후 Human 확정 필수"
+          ],
+          "error_handling": "FileWriteException → 파일 롤백 → audit_log WRITE_FAILED 기록"
+        }
+      ]
+    },
+    "agent_tools": {
+      "description": "Agent 간 통신 및 LLM 호출 Tool. Orch 경유 원칙 적용.",
+      "tools": [
+        {
+          "tool_name": "llm_call",
+          "tool_type": "Agent",
+          "description": "LLMProvider 인터페이스 경유 LLM 호출 Tool. 직접 SDK 호출 금지.",
+          "allowed_agents": ["Back-A", "Front-A", "UIUX-A", "Evol-A", "Orch", "Test-A"],
+          "requires_approval": false,
+          "risk_level": "MEDIUM",
+          "audit_required": true,
+          "circuit_breaker": { "failure_threshold": 3, "timeout_seconds": 120, "retry_count": 2 },
+          "constraints": [
+            "직접 SDK 호출 금지 (anthropic, openai 등) → LLMService.complete() 경유 필수",
+            "max_tokens 제한 적용 (기본 4096, 최대 8192)",
+            "사용자 입력 → sanitize_input() → 프롬프트 삽입",
+            "LLM 응답 → validate_response() → 반환",
+            "모든 LLM 호출은 llm_call_logs 테이블에 비용 기록 필수",
+            "LLM에 Restricted/Sensitive 데이터 전달 금지"
+          ],
+          "error_handling": "LLMCallException → HallucinationException (validate 실패) → Human 에스컬레이션"
+        },
+        {
+          "tool_name": "api_call_internal",
+          "tool_type": "Agent",
+          "description": "내부 서비스 API 호출 Tool. JWT 인증 필수.",
+          "allowed_agents": ["Back-A", "Orch"],
+          "requires_approval": false,
+          "risk_level": "MEDIUM",
+          "audit_required": true,
+          "circuit_breaker": { "failure_threshold": 5, "timeout_seconds": 30, "retry_count": 3 },
+          "constraints": [
+            "RBAC 서비스 토큰 검증 필수",
+            "TLS(HTTPS) 통신만 허용",
+            "useAgent 훅 경유 (Frontend) 또는 내부 서비스 클라이언트(Backend) 경유 필수"
+          ],
+          "error_handling": "InternalAPIException → Orch 에스컬레이션 (3회 실패 시)"
+        },
+        {
+          "tool_name": "run_test",
+          "tool_type": "Agent",
+          "description": "Test Scenario 자동 실행 및 결과 수집 Tool.",
+          "allowed_agents": ["Test-A"],
+          "requires_approval": false,
+          "risk_level": "MEDIUM",
+          "audit_required": true,
+          "circuit_breaker": { "failure_threshold": 3, "timeout_seconds": 300, "retry_count": 1 },
+          "constraints": [
+            "프로덕션 DB 직접 접근 금지 → 테스트 DB만 사용",
+            "실행 결과 trajectory_logs INSERT 필수 (kpi_metrics 포함)",
+            "실패 케이스 failure_tagged=true 기록 필수"
+          ],
+          "error_handling": "TestRunException → Simulation Log에 FAILED 기록 → Test-A 재시도 (최대 1회)"
+        }
+      ]
+    },
+    "external_tools": {
+      "description": "외부 서비스 호출 Tool. Human 승인 필수. allowlist 검사 후 실행.",
+      "tools": [
+        {
+          "tool_name": "api_call_external",
+          "tool_type": "External",
+          "description": "외부 API 호출 Tool. Human 승인 + allowlist 검사 필수.",
+          "allowed_agents": ["Back-A"],
+          "requires_approval": true,
+          "risk_level": "HIGH",
+          "audit_required": true,
+          "circuit_breaker": { "failure_threshold": 3, "timeout_seconds": 60, "retry_count": 2 },
+          "constraints": [
+            "Human 승인(P1) 없이 실행 절대 금지",
+            "외부 엔드포인트 allowlist 검사 필수 (check_allowed_endpoint())",
+            "API Key 환경변수 사용 필수 (하드코딩 절대 금지)",
+            "외부로 전송하는 데이터는 Internal 이하만 허용",
+            "모든 외부 호출 audit_log에 상세 기록"
+          ],
+          "error_handling": "ExternalAPIException → Circuit Breaker 작동 → Orch 에스컬레이션"
+        },
+        {
+          "tool_name": "send_notification",
+          "tool_type": "External",
+          "description": "알림 발송 Tool (인앱/이메일/SMS). 수신자 허용 목록 검사 후 발송.",
+          "allowed_agents": ["Orch", "Monitor-A"],
+          "requires_approval": false,
+          "risk_level": "LOW",
+          "audit_required": false,
+          "circuit_breaker": { "failure_threshold": 5, "timeout_seconds": 30, "retry_count": 3 },
+          "constraints": [
+            "수신자는 allowlist에 등록된 Human/조직만 허용",
+            "PII 데이터 노출 금지 (마스킹 처리 후 발송)",
+            "Escalation 알림은 SLA 내 재시도 포함"
+          ],
+          "error_handling": "NotificationException → Dead Letter Queue 저장 → 재시도 스케줄 등록"
+        },
+        {
+          "tool_name": "read_logs",
+          "tool_type": "External",
+          "description": "audit_logs/trajectory_logs 조회 전용 Tool. 읽기 전용.",
+          "allowed_agents": ["Monitor-A", "Evol-A"],
+          "requires_approval": false,
+          "risk_level": "LOW",
+          "audit_required": false,
+          "circuit_breaker": { "failure_threshold": 5, "timeout_seconds": 30, "retry_count": 3 },
+          "constraints": [
+            "SELECT 조회만 허용 — INSERT/UPDATE/DELETE 절대 금지",
+            "조회 결과 외부 전송 금지",
+            "organization_id(tenant_id) 필터 필수"
+          ],
+          "error_handling": "LogReadException → 에러 로그 기록"
+        }
+      ]
+    }
+  },
+
+  "agent_permission_matrix": {
+    "description": "Agent별 Tool 사용 허용 매트릭스. O=허용, X=금지, O*=승인 후 허용.",
+    "matrix": [
+      { "tool": "llm_call",          "Orch": "O",  "Monitor-A": "X",  "Back-A": "O",  "Front-A": "O",  "Test-A": "O",  "Evol-A": "O",  "UIUX-A": "O"  },
+      { "tool": "db_query",          "Orch": "X",  "Monitor-A": "O",  "Back-A": "O",  "Front-A": "X",  "Test-A": "O",  "Evol-A": "O",  "UIUX-A": "X"  },
+      { "tool": "db_write",          "Orch": "X",  "Monitor-A": "X",  "Back-A": "O*", "Front-A": "X",  "Test-A": "X",  "Evol-A": "X",  "UIUX-A": "X"  },
+      { "tool": "api_call_internal", "Orch": "O",  "Monitor-A": "X",  "Back-A": "O",  "Front-A": "X",  "Test-A": "X",  "Evol-A": "X",  "UIUX-A": "X"  },
+      { "tool": "api_call_external", "Orch": "X",  "Monitor-A": "X",  "Back-A": "O*", "Front-A": "X",  "Test-A": "X",  "Evol-A": "X",  "UIUX-A": "X"  },
+      { "tool": "file_read",         "Orch": "O",  "Monitor-A": "O",  "Back-A": "O",  "Front-A": "O",  "Test-A": "O",  "Evol-A": "O",  "UIUX-A": "O"  },
+      { "tool": "file_write",        "Orch": "X",  "Monitor-A": "X",  "Back-A": "O*", "Front-A": "O*", "Test-A": "X",  "Evol-A": "X",  "UIUX-A": "X"  },
+      { "tool": "send_notification", "Orch": "O",  "Monitor-A": "O",  "Back-A": "X",  "Front-A": "X",  "Test-A": "X",  "Evol-A": "X",  "UIUX-A": "X"  },
+      { "tool": "run_test",          "Orch": "X",  "Monitor-A": "X",  "Back-A": "X",  "Front-A": "X",  "Test-A": "O",  "Evol-A": "X",  "UIUX-A": "X"  },
+      { "tool": "read_logs",         "Orch": "X",  "Monitor-A": "O",  "Back-A": "X",  "Front-A": "X",  "Test-A": "X",  "Evol-A": "O",  "UIUX-A": "X"  }
+    ],
+    "legend": { "O": "허용", "O*": "Human 승인 후 허용", "X": "금지" }
+  },
+
+  "circuit_breaker": {
+    "description": "Circuit Breaker 패턴. Tool 연속 실패 시 자동 차단 → Orch 에스컬레이션.",
+    "states": ["CLOSED", "OPEN", "HALF_OPEN"],
+    "state_transitions": {
+      "CLOSED_TO_OPEN":     "failure_threshold 초과 시 자동 전환 → Tool 호출 차단",
+      "OPEN_TO_HALF_OPEN":  "timeout_seconds 경과 후 자동 전환 → 1회 시험 호출 허용",
+      "HALF_OPEN_TO_CLOSED":"시험 호출 성공 시 정상 복귀",
+      "HALF_OPEN_TO_OPEN":  "시험 호출 실패 시 OPEN 유지"
+    },
+    "on_open_action": "ToolCircuitOpenException 발생 → Orch 에스컬레이션 → audit_log CIRCUIT_OPEN 기록",
+    "cursor_code_rule": "모든 Tool 실행 클래스에 CircuitBreaker 데코레이터 또는 미들웨어 적용 필수"
+  },
+
+  "tool_invocation_flow": {
+    "description": "Tool 호출 표준 흐름. Skill에서 tool_registry.call() 경유 시 반드시 준수.",
+    "steps": [
+      { "step": 1, "action": "Tool 호출 요청",        "rule": "Skill에서 tool_registry.call(tool_name, agent_code, payload) 호출" },
+      { "step": 2, "action": "tool_registry 등록 확인","rule": "미등록 Tool → ToolNotFoundException" },
+      { "step": 3, "action": "allowed_agents 검증",    "rule": "호출 Agent가 allowed_agents에 없으면 → ToolAccessException" },
+      { "step": 4, "action": "is_active 확인",         "rule": "is_active=false → ToolDisabledException" },
+      { "step": 5, "action": "Circuit Breaker 확인",   "rule": "OPEN 상태 → ToolCircuitOpenException → Orch 에스컬레이션" },
+      { "step": 6, "action": "requires_approval 확인", "rule": "true → P1 approval_requests INSERT → APPROVED 대기" },
+      { "step": 7, "action": "Risk 체크",              "rule": "HIGH 이상 → Human 승인 게이트 확인" },
+      { "step": 8, "action": "Tool 실행",              "rule": "허용 범위 내 실행" },
+      { "step": 9, "action": "결과 검증",              "rule": "Output 유효성 확인 (llm_call은 validate_response() 추가)" },
+      { "step": 10,"action": "audit_log 기록",         "rule": "audit_required=true인 Tool은 audit_logs INSERT 필수" }
+    ]
+  },
+
+  "cursor_code_rules": {
+    "description": "Cursor가 Tool 관련 코드 생성 시 반드시 준수하는 규칙",
+    "rules": [
+      "Agent 코드에서 Tool 직접 import/호출 절대 금지 → tool_registry.call() 경유 필수",
+      "새 Tool 생성 시 tool_registry 테이블 INSERT 코드 포함 필수",
+      "agent_permission_matrix 기준으로 allowed_agents 설정 (임의 추가 금지)",
+      "db_write Tool 사용 코드: async with db.begin() 트랜잭션 블록 필수",
+      "llm_call Tool 사용 코드: sanitize_input() + validate_response() 양쪽 모두 적용 필수",
+      "api_call_external 사용 코드: requires_approval=true → P1 approval_requests INSERT 로직 포함 필수",
+      "Circuit Breaker 설정 없는 Tool 클래스 생성 금지",
+      "audit_required=true Tool: finally 블록에 audit_log INSERT 코드 포함 필수"
+    ]
+  }
+}

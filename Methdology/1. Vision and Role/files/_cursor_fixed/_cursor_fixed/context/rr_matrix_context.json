@@ -1,0 +1,312 @@
+{
+  "_meta": {
+    "document": "1.3 Agent R&R Matrix",
+    "phase": "Phase 1 - Vision & Role 정의",
+    "version": "v1.1",
+    "created_by": "Claude",
+    "description": "Cursor AI가 코드 생성 시 참조하는 Agent 역할/책임 매트릭스. Agent별 허용 범위(Scope) 정의 기준.",
+    "change_log": [
+      {
+        "version": "v1.0",
+        "date": "2026",
+        "summary": "Phase 1 R&R Matrix 기반 초기 생성"
+      },
+      {
+        "version": "v1.1",
+        "date": "2026",
+        "summary": "Monitor-A, Evol-A 추가 (governance.json과 일치)"
+      }
+    ]
+  },
+  "raci_legend": {
+    "H-A": "Human 최종책임 (Accountable) — 책임은 반드시 Human에 귀속",
+    "H-R": "Human 실행책임 (Responsible) — Human이 직접 수행",
+    "A-R": "Agent 실행책임 (Responsible) — Agent가 주도적으로 실행, Human 승인 필요",
+    "A-S": "Agent 보조 (Support) — Agent가 보조 역할, Human 주도",
+    "C": "자문 (Consulted) — 의견 제공, 실행 책임 없음",
+    "I": "통보 (Informed) — 결과 통보만 수신"
+  },
+  "human_roles": [
+    {
+      "code": "PM",
+      "name": "Project Manager",
+      "responsibility": "프로젝트 전체 최종 책임, 예산/일정"
+    },
+    {
+      "code": "Arch",
+      "name": "AI Architect",
+      "responsibility": "아키텍처 설계, Authority Level 제안, 기술 표준"
+    },
+    {
+      "code": "UIUX-H",
+      "name": "UIUX Designer",
+      "responsibility": "Persona 정의, 시나리오 설계, Conversation Flow"
+    },
+    {
+      "code": "Front-H",
+      "name": "Frontend Developer",
+      "responsibility": "UI 컴포넌트 개발, React 코드 검수"
+    },
+    {
+      "code": "Back-H",
+      "name": "Backend Developer",
+      "responsibility": "API 개발, DB 설계, Tool 구현 검수"
+    },
+    {
+      "code": "Test-H",
+      "name": "QA / Test Engineer",
+      "responsibility": "테스트 시나리오 설계, Simulation 실행, KPI 측정"
+    }
+  ],
+  "agents": [
+    {
+      "code": "Orch",
+      "name": "Orchestrator Agent",
+      "is_lead": true,
+      "role": "전체 Workflow 조정 및 통제",
+      "responsibilities": [
+        "전체 Workflow 조정",
+        "Escalation 판단",
+        "Authority Level 준수 확인",
+        "Decision Gate 실행"
+      ],
+      "allowed": [
+        "Workflow 조정",
+        "Escalation 판단",
+        "Decision Gate 통과 (Human 승인 후)",
+        "Agent 실행 중단 (Risk CRITICAL 시)"
+      ],
+      "forbidden": [
+        "전략 해석",
+        "자동 권한 상승",
+        "Context 직접 수정",
+        "Governance 승인 없는 실행"
+      ],
+      "authority_level": "L1"
+    },
+    {
+      "code": "UIUX-A",
+      "name": "UIUX Agent",
+      "role": "Persona 분석 및 UX 설계 보조",
+      "responsibilities": [
+        "Persona 분석 보조",
+        "Conversation Flow 초안 생성",
+        "시나리오 자동화"
+      ],
+      "allowed": [
+        "Persona 분석 보조",
+        "시나리오 초안 생성",
+        "UX Flow 초안 생성"
+      ],
+      "forbidden": [
+        "최종 Persona 확정 (Human 전담)",
+        "Context 직접 수정"
+      ],
+      "authority_level": "L1"
+    },
+    {
+      "code": "Front-A",
+      "name": "Frontend Agent",
+      "role": "React 컴포넌트 및 UI 코드 생성",
+      "responsibilities": [
+        "React 컴포넌트 코드 생성",
+        "UI Schema 자동화",
+        "ApprovalGate 컴포넌트 생성"
+      ],
+      "allowed": [
+        "컴포넌트 코드 생성",
+        "타입 정의 생성",
+        "useAgent 훅 경유 API 호출 코드 생성"
+      ],
+      "forbidden": [
+        "any 타입 사용",
+        "API 직접 호출 (useAgent 훅 경유 필수)",
+        "governance.ts 타입 무시"
+      ],
+      "authority_level": "L1"
+    },
+    {
+      "code": "Back-A",
+      "name": "Backend Agent",
+      "role": "Python Agent 코드 및 API 생성",
+      "responsibilities": [
+        "Python Agent 코드 생성",
+        "FastAPI 엔드포인트 생성",
+        "DB 쿼리 작성"
+      ],
+      "allowed": [
+        "BaseAgent 상속 코드 생성",
+        "API 엔드포인트 생성",
+        "DB 쿼리 작성 (트랜잭션 포함)"
+      ],
+      "forbidden": [
+        "Audit Log 없는 실행 코드",
+        "트랜잭션 없는 DB 변경",
+        "Human 승인 없는 외부 API 호출",
+        "API Key 하드코딩"
+      ],
+      "authority_level": "L1"
+    },
+    {
+      "code": "Test-A",
+      "name": "Test Agent",
+      "role": "테스트 자동 실행 및 KPI 측정",
+      "responsibilities": [
+        "Test Scenario 자동 실행",
+        "KPI 측정",
+        "Evaluation Report 생성",
+        "Drift 탐지"
+      ],
+      "allowed": [
+        "시나리오 자동 실행",
+        "KPI 측정 및 집계",
+        "이상 탐지 및 Incident 알림"
+      ],
+      "forbidden": [
+        "회귀 테스트 없이 재배포 요청",
+        "실패 케이스 trajectory_logs 미기록",
+        "Evaluation Report 없는 배포 승인 요청"
+      ],
+      "authority_level": "L1"
+    },
+    {
+      "code": "Monitor-A",
+      "name": "Monitoring Agent",
+      "authority_level": "L0",
+      "role": "KPI 감시 및 이상 탐지 전용",
+      "responsibilities": [
+        "KPI 실시간 모니터링",
+        "Drift 자동 탐지",
+        "Incident 알림 발송",
+        "audit_logs 조회 및 보고서 생성"
+      ],
+      "allowed": [
+        "KPI 실시간 모니터링",
+        "Drift 자동 탐지",
+        "Incident 알림 발송",
+        "audit_logs 조회 및 보고서 생성"
+      ],
+      "forbidden": [
+        "시스템 직접 변경",
+        "Agent 강제 중단 (Orchestrator 경유 필수)",
+        "Context 수정"
+      ]
+    },
+    {
+      "code": "Evol-A",
+      "name": "Evolution Agent",
+      "authority_level": "L1",
+      "role": "Context 수정 제안 및 개선 루프 보조",
+      "responsibilities": [
+        "로그 분석 및 패턴 탐지",
+        "Context 수정 제안서 작성",
+        "Regression Test 결과 분석"
+      ],
+      "allowed": [
+        "로그 분석 및 패턴 탐지",
+        "Context 수정 제안서 작성",
+        "Regression Test 결과 분석"
+      ],
+      "forbidden": [
+        "Context 직접 수정 (Governance 승인 없이)",
+        "재배포 직접 트리거",
+        "승인 없는 Constraint 변경"
+      ]
+    }
+  ],
+  "absolute_human_responsibilities": [
+    {
+      "item": "최종 승인 (H-A)",
+      "reason": "책임(Accountability)은 항상 인간 조직에 귀속",
+      "violation": "배포 차단 + 재승인 필요"
+    },
+    {
+      "item": "Authority Level 선정",
+      "reason": "AI 자율성 수준은 Human이 결정",
+      "violation": "Governance Board 재검토"
+    },
+    {
+      "item": "Governance Charter 서명",
+      "reason": "법적/조직적 책임 귀속",
+      "violation": "문서 무효 처리"
+    },
+    {
+      "item": "예외 승인",
+      "reason": "표준 위반에 대한 책임 귀속",
+      "violation": "예외 기록 + 만료 기간 설정"
+    },
+    {
+      "item": "Risk 최종 판단 (Critical)",
+      "reason": "생명/안전/법적 책임 직접 영향",
+      "violation": "즉시 에스컬레이션"
+    }
+  ],
+  "phase_raci_summary": {
+    "phase1": {
+      "name": "Vision & Role 정의",
+      "lead_human": "PM, Arch",
+      "lead_agent": "Orch (A-S 역할)",
+      "key_activities": [
+        "Problem Definition",
+        "Persona Spec",
+        "Agent R&R Matrix",
+        "Governance Charter"
+      ]
+    },
+    "phase2": {
+      "name": "Agent Workflow 설계",
+      "lead_human": "PM, Arch",
+      "lead_agent": "Orch (A-R 역할 — 가장 적극 참여)",
+      "key_activities": [
+        "Workflow Diagram",
+        "Decision Gate",
+        "Escalation Rule",
+        "Agent Interaction Spec"
+      ]
+    },
+    "phase3": {
+      "name": "Capability 구축",
+      "lead_human": "Arch, Front-H, Back-H",
+      "lead_agent": "Front-A, Back-A (A-R 역할)",
+      "key_activities": [
+        "System Prompt",
+        "Skill Library",
+        "Tool Config",
+        "Memory 구조",
+        "코드 구현"
+      ]
+    },
+    "phase4": {
+      "name": "Simulation & Test",
+      "lead_human": "Test-H",
+      "lead_agent": "Test-A (A-R 역할)",
+      "key_activities": [
+        "Test Scenario",
+        "Simulation",
+        "KPI 측정",
+        "Evaluation Report"
+      ]
+    },
+    "phase5": {
+      "name": "Deploy & Monitoring",
+      "lead_human": "Arch, Back-H",
+      "lead_agent": "Back-A, Test-A",
+      "key_activities": [
+        "Release Gate",
+        "Logging 설정",
+        "운영 대시보드"
+      ]
+    },
+    "phase6": {
+      "name": "Evolution Loop",
+      "lead_human": "PM, Arch",
+      "lead_agent": "Orch, Test-A (A-R 역할)",
+      "key_activities": [
+        "Drift 탐지",
+        "Context 수정 제안",
+        "Regression Test",
+        "재배포"
+      ]
+    }
+  }
+}

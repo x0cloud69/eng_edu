@@ -1,0 +1,191 @@
+{
+  "version": "1.0.0",
+  "phase": "Phase 3 — UI/UX Design System",
+  "description": "AI-Native SaaS 프레임워크의 프론트엔드 디자인 시스템, 페이지 구조, 공통 컴포넌트 정의",
+  "depends_on": [
+    "saas_foundation.json",
+    "persona_context.json",
+    "workflow_context.json",
+    "hitl_context.json",
+    "governance.json",
+    "phase3_context.json"
+  ],
+
+  "design_system": {
+    "framework": "Next.js 14+ (App Router)",
+    "ui_library": "shadcn/ui (wrapper 사용, 직접 수정 금지)",
+    "styling": "Tailwind CSS (CSS 변수 + dark: 클래스)",
+    "form": "react-hook-form + zod",
+    "state": "React Query (서버 상태) + Zustand (클라이언트 상태)",
+    "icons": "Lucide React"
+  },
+
+  "color_tokens": {
+    "primary": { "light": "#028090", "dark": "#03A9B5" },
+    "secondary": { "light": "#1E2761", "dark": "#2E3A87" },
+    "risk_levels": {
+      "LOW":      { "bg": "gray-50",   "text": "gray-600",   "border": "gray-200" },
+      "MEDIUM":   { "bg": "yellow-50", "text": "yellow-700", "border": "yellow-300" },
+      "HIGH":     { "bg": "orange-50", "text": "orange-700", "border": "orange-400" },
+      "CRITICAL": { "bg": "red-50",    "text": "red-700",    "border": "red-500" }
+    },
+    "drift_levels": {
+      "GREEN":  { "bg": "green-50",  "text": "green-700",  "border": "green-400" },
+      "YELLOW": { "bg": "yellow-50", "text": "yellow-700", "border": "yellow-400" },
+      "RED":    { "bg": "red-50",    "text": "red-700",    "border": "red-500" }
+    },
+    "status": {
+      "ACTIVE":    { "bg": "green-100",  "text": "green-800" },
+      "PENDING":   { "bg": "yellow-100", "text": "yellow-800" },
+      "APPROVED":  { "bg": "blue-100",   "text": "blue-800" },
+      "REJECTED":  { "bg": "red-100",    "text": "red-800" },
+      "DRAFT":     { "bg": "gray-100",   "text": "gray-800" },
+      "DEPLOYED":  { "bg": "purple-100", "text": "purple-800" }
+    }
+  },
+
+  "layout": {
+    "shell": {
+      "sidebar": { "width": "256px", "collapsed": "64px" },
+      "header": { "height": "64px" },
+      "content": { "max_width": "1280px", "padding": "24px" }
+    },
+    "navigation": [
+      { "label": "대시보드",   "path": "/",            "icon": "LayoutDashboard", "module": "home" },
+      { "label": "전자서명",   "path": "/esignature",  "icon": "FileSignature",   "module": "esignature" },
+      { "label": "승인 관리",  "path": "/approvals",   "icon": "CheckCircle",     "module": "approvals" },
+      { "label": "메뉴 관리",  "path": "/menus",       "icon": "Menu",            "module": "menus" },
+      { "label": "재사용 현황", "path": "/reuse",       "icon": "Recycle",         "module": "reuse" },
+      { "label": "KPI 모니터링","path": "/monitoring",  "icon": "Activity",        "module": "monitoring" },
+      { "label": "Evolution",  "path": "/evolution",   "icon": "RefreshCcw",      "module": "evolution" },
+      { "label": "설정",       "path": "/settings",    "icon": "Settings",        "module": "settings" }
+    ]
+  },
+
+  "common_components": {
+    "ui": {
+      "StatusBadge": {
+        "description": "범용 상태 배지 (Risk, Drift, Approval 등)",
+        "props": ["variant: risk | drift | status | authority", "value: string"],
+        "location": "components/ui/StatusBadge.tsx"
+      },
+      "DataTable": {
+        "description": "정렬/필터/페이징 테이블",
+        "props": ["columns, data, onSort, onFilter, pagination"],
+        "location": "components/ui/DataTable.tsx"
+      },
+      "EmptyState": {
+        "description": "데이터 없음 / 에러 상태",
+        "props": ["variant: empty | error", "title, description, action"],
+        "location": "components/ui/EmptyState.tsx"
+      },
+      "PageHeader": {
+        "description": "페이지 제목 + 브레드크럼 + 액션 버튼",
+        "props": ["title, breadcrumbs, actions"],
+        "location": "components/ui/PageHeader.tsx"
+      },
+      "KPICard": {
+        "description": "KPI 요약 카드 (값, 목표, Drift 표시)",
+        "props": ["kpiCode, name, value, target, drift, trend"],
+        "location": "components/ui/KPICard.tsx"
+      },
+      "SkeletonTable": {
+        "description": "테이블 로딩 스켈레톤",
+        "props": ["rows: number, cols: number"],
+        "location": "components/ui/SkeletonTable.tsx"
+      }
+    },
+    "agent": {
+      "AgentStatusBadge": {
+        "description": "Agent 실행 상태 배지",
+        "props": ["agentCode, status: idle | running | success | error"],
+        "location": "components/agent/AgentStatusBadge.tsx"
+      },
+      "ExecutionTimeline": {
+        "description": "Agent 실행 단계 타임라인",
+        "props": ["traceId, steps"],
+        "location": "components/agent/ExecutionTimeline.tsx"
+      },
+      "RiskBanner": {
+        "description": "HIGH/CRITICAL 경고 배너",
+        "props": ["riskLevel, traceId, message"],
+        "location": "components/agent/RiskBanner.tsx"
+      },
+      "AuditLogTable": {
+        "description": "감사 로그 테이블",
+        "props": ["logs: AuditLog[]"],
+        "location": "components/agent/AuditLogTable.tsx"
+      }
+    }
+  },
+
+  "pages": {
+    "home": {
+      "path": "/",
+      "title": "대시보드",
+      "components": ["KPICard x7", "AgentStatusBadge", "최근 활동 목록"],
+      "data_source": "monitor.get_dashboard, 최근 audit_logs"
+    },
+    "auth": {
+      "path": "/auth/login",
+      "title": "로그인",
+      "components": ["LoginForm (email + password)", "ErrorMessage"],
+      "data_source": "auth.login"
+    },
+    "esignature": {
+      "path": "/esignature",
+      "title": "전자서명 관리",
+      "components": ["DataTable", "CreateForm", "ApprovalGate (sign action)"],
+      "data_source": "esignature.list, esignature.create, esignature.sign"
+    },
+    "approvals": {
+      "path": "/approvals",
+      "title": "승인 관리",
+      "components": ["DataTable (pending/history tabs)", "ApprovalGate", "StatusBadge"],
+      "data_source": "approvals.list, approvals.approve, approvals.reject"
+    },
+    "menus": {
+      "path": "/menus",
+      "title": "메뉴 관리",
+      "components": ["TreeView (계층 메뉴)", "EmptyState"],
+      "data_source": "menu.get_tree"
+    },
+    "reuse": {
+      "path": "/reuse",
+      "title": "재사용 현황",
+      "components": ["KPICard (K-01, K-02)", "DataTable (modules, projects)", "Charts"],
+      "data_source": "reuse.kpi, reuse.list_modules, reuse.list_projects"
+    },
+    "monitoring": {
+      "path": "/monitoring",
+      "title": "KPI 모니터링",
+      "components": ["KPICard x7", "DriftChart", "AlertList", "DashboardSummary"],
+      "data_source": "monitor.get_dashboard, monitor.get_alerts, monitor.get_history"
+    },
+    "evolution": {
+      "path": "/evolution",
+      "title": "Evolution 관리",
+      "components": ["ProposalList", "ProposalDetail", "DriftAnalysis", "PatchNoteView"],
+      "data_source": "evolution.list_proposals, evolution.analyze_drift, evolution.get_proposal"
+    }
+  },
+
+  "page_patterns": {
+    "list_page": ["PageHeader", "FilterBar", "DataTable", "Pagination", "EmptyState"],
+    "detail_page": ["PageHeader(breadcrumb)", "Tabs(기본정보/이력/감사로그)"],
+    "form_page": ["FormField(react-hook-form+zod)", "ApprovalGate(HIGH+)", "이탈 경고"],
+    "dashboard_page": ["KPICard", "AgentStatusBadge", "RiskBanner(HIGH+)", "Charts"]
+  },
+
+  "accessibility": {
+    "standard": "WCAG 2.1 AA",
+    "rules": [
+      "아이콘 버튼 aria-label 필수",
+      "폼 label-input 연결 필수",
+      "포커스 링 focus-visible:ring-2 (제거 금지)",
+      "에러는 색상 + 아이콘 + 텍스트 조합",
+      "최소 클릭 영역 44x44px",
+      "div onClick 금지 → button 사용"
+    ]
+  }
+}

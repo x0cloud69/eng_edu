@@ -1,0 +1,205 @@
+{
+  "_meta": {
+    "document": "AI 시스템 운영 표준 통합 (0_0 ~ 0_C 기반)",
+    "version": "v1.0",
+    "phase": "Phase 1 - Vision & Role 정의",
+    "created_by": "Claude",
+    "description": "Cursor AI가 코드 생성 시 참조하는 운영 표준 통합 JSON",
+    "change_log": [
+      { "version": "v1.0", "date": "2026", "summary": "Phase 1 산출물 기반 초기 생성" }
+    ]
+  },
+
+  "five_principles": {
+    "description": "AI 운영 5대 원칙 — 모든 표준의 상위 기준 (0_C)",
+    "principles": [
+      {
+        "id": 1,
+        "name": "전략과 실행의 분리",
+        "en": "Separation of Strategy & Execution",
+        "rules": [
+          "Global Context와 Agent 실행 코드는 반드시 분리",
+          "Agent는 Context를 해석하지 않으며 구조화된 제약만 따름",
+          "Context 변경은 Governance 승인 후 반영"
+        ],
+        "code_rule": "Agent 함수 안에 전략 판단 로직 직접 작성 금지"
+      },
+      {
+        "id": 2,
+        "name": "최소 권한 원칙",
+        "en": "Least Privilege Principle",
+        "rules": [
+          "모든 Agent는 필요한 최소 범위 내에서만 권한 보유",
+          "Scope 초과 실행 금지",
+          "권한 상승은 공식 승인 절차를 통해서만 가능"
+        ],
+        "code_rule": "각 Agent는 allowed_tools, allowed_scope만 실행"
+      },
+      {
+        "id": 3,
+        "name": "감사 가능성 우선",
+        "en": "Auditability by Design",
+        "rules": [
+          "모든 의사결정은 추적 가능해야 함",
+          "승인, 실행, 변경 이력은 로그로 기록",
+          "책임(Accountability)은 항상 인간 조직에 귀속"
+        ],
+        "code_rule": "모든 Agent 실행 → audit_logs INSERT 필수, 로그 없는 상태 변경 금지"
+      },
+      {
+        "id": 4,
+        "name": "리스크 기반 통제",
+        "en": "Risk-Based Control",
+        "rules": [
+          "자율성 수준은 리스크 등급에 비례하여 결정",
+          "HIGH 이상 리스크는 강화된 통제 및 Human 승인 적용",
+          "Drift 및 KPI 이상 징후 감지 시 즉시 재평가"
+        ],
+        "code_rule": "Risk Level 체크 로직 모든 Agent 필수 포함"
+      },
+      {
+        "id": 5,
+        "name": "지속적 개선 체계 내재화",
+        "en": "Built-in Evolution Loop",
+        "rules": [
+          "KPI 및 모니터링 결과는 반드시 개선 활동으로 연결",
+          "Context 수정은 승인 및 회귀 테스트 후 반영",
+          "반복되는 예외는 구조적 개선 대상으로 전환"
+        ],
+        "code_rule": "trajectory_logs 테이블에 실행 궤적 기록 필수"
+      }
+    ]
+  },
+
+  "context_management": {
+    "description": "AI Context 관리 표준 (0_2)",
+    "layers": [
+      {
+        "level": 1,
+        "name": "Global Strategic Context",
+        "file": ".cursor/context/project_context.json",
+        "contains": ["Scope", "Authority", "KPI", "Risk", "Governance"],
+        "rule": "모든 Agent 실행 전 반드시 로드, 변경 시 Governance 승인 필수"
+      },
+      {
+        "level": 2,
+        "name": "Agent-Specific Context",
+        "file": ".cursor/context/agents/{agent_name}_context.json",
+        "contains": ["allowed_scope", "allowed_tools", "allowed_skills", "execution_constraints"],
+        "rule": "Global Context로부터 자동 생성, 직접 수정 금지"
+      },
+      {
+        "level": 3,
+        "name": "Runtime Context",
+        "file": "DB 또는 메모리 (세션 단위)",
+        "contains": ["user_input", "session_state", "dynamic_variables"],
+        "rule": "Global/Agent Context 변경 불가"
+      }
+    ],
+    "change_procedure": [
+      "KPI 또는 Risk 변화 감지",
+      "Risk 재평가 수행",
+      "Global Context 수정 제안 작성",
+      "Governance Board 승인",
+      "Agent Context 자동 재생성",
+      "Regression Test 수행",
+      "승인 후 재배포"
+    ]
+  },
+
+  "scope": {
+    "description": "AI 운영 표준 적용 범위 (0_7)",
+    "in_scope": [
+      "LLM 기반 시스템",
+      "의사결정 지원 AI 시스템",
+      "자동화된 추천/분류/예측 시스템",
+      "외부 AI API를 사용하는 시스템",
+      "사용자 행동에 영향을 미치는 AI 기능"
+    ],
+    "out_of_scope": [
+      "단순 규칙 기반 자동화 (AI 모델 미사용)",
+      "내부 실험용 프로토타입 (외부 영향 없음)",
+      "단순 데이터 시각화 도구"
+    ],
+    "authority_level_scope": {
+      "L0_L1": "기본 통제 체계 적용",
+      "L2":    "강화된 Risk 관리 및 승인 절차 적용",
+      "L3":    "Executive 및 Governance Board 특별 승인 필수"
+    },
+    "exception_procedure": [
+      "표준 적용 제외는 Governance Board 승인 필요",
+      "예외 사유 문서화 필수",
+      "예외 적용 시 유효 기간 명시",
+      "정기 재검토 의무화"
+    ]
+  },
+
+  "organization_raci": {
+    "description": "AI 운영 조직 구조 및 RACI (0_8)",
+    "roles": [
+      { "role": "Executive Sponsor",     "responsibility": "최종 책임자", "approval_level": "L3" },
+      { "role": "AI Governance Board",   "responsibility": "정책 승인, Release Gate 승인", "approval_level": "L2" },
+      { "role": "Business Owner",        "responsibility": "비즈니스 요구사항 정의, KPI 승인", "approval_level": "L0~L1" },
+      { "role": "AI Architect",          "responsibility": "구조 설계 및 자율성 레벨 제안", "approval_level": "-" },
+      { "role": "DevOps Lead",           "responsibility": "배포 및 운영 안정성 책임", "approval_level": "-" },
+      { "role": "Compliance Officer",    "responsibility": "법적/윤리적 준수 검토", "approval_level": "-" }
+    ],
+    "raci_matrix": [
+      { "activity": "Problem Definition 승인",  "Executive": "I", "Governance_Board": "A", "Business_Owner": "R", "AI_Architect": "C", "DevOps_Compliance": "C" },
+      { "activity": "Authority Level 선정",     "Executive": "I", "Governance_Board": "A", "Business_Owner": "C", "AI_Architect": "R", "DevOps_Compliance": "C" },
+      { "activity": "Architecture 설계",        "Executive": "I", "Governance_Board": "C", "Business_Owner": "C", "AI_Architect": "A/R", "DevOps_Compliance": "C" },
+      { "activity": "Risk Assessment 수행",     "Executive": "I", "Governance_Board": "A", "Business_Owner": "C", "AI_Architect": "R", "DevOps_Compliance": "R" },
+      { "activity": "KPI 정의",                 "Executive": "I", "Governance_Board": "C", "Business_Owner": "A/R", "AI_Architect": "C", "DevOps_Compliance": "C" },
+      { "activity": "Release Gate 승인",        "Executive": "I", "Governance_Board": "A", "Business_Owner": "C", "AI_Architect": "C", "DevOps_Compliance": "R" },
+      { "activity": "Incident 대응",            "Executive": "I", "Governance_Board": "C", "Business_Owner": "C", "AI_Architect": "R", "DevOps_Compliance": "A/R" }
+    ],
+    "rule": "Agent는 Accountable 역할을 가질 수 없다. 모든 최종 책임은 인간 조직에 귀속된다."
+  },
+
+  "security": {
+    "description": "AI 보안 및 데이터 관리 표준 (0_A)",
+    "data_classification": [
+      { "level": "Public",     "description": "공개 가능 정보",            "code_handling": "일반 처리" },
+      { "level": "Internal",   "description": "내부 사용 정보",            "code_handling": "외부 전송 금지" },
+      { "level": "Sensitive",  "description": "민감 정보 (업무상 보호)",   "code_handling": "암호화 + 마스킹" },
+      { "level": "Restricted", "description": "개인정보 및 고위험 정보",   "code_handling": "암호화 + 익명화 + 접근 로그" }
+    ],
+    "access_control": {
+      "model": "RBAC (Role-Based Access Control)",
+      "principle": "최소 권한 원칙",
+      "admin_rule": "이중 승인 체계",
+      "code_rule": "API 엔드포인트마다 @require_role() 데코레이터 적용"
+    },
+    "data_protection": {
+      "at_rest":    "암호화 필수 (Sensitive 이상)",
+      "in_transit": "HTTPS only (TLS 1.2 이상)",
+      "masking":    "Restricted 데이터 API 응답 시 마스킹",
+      "minimum_collection": "필요한 데이터만 수집"
+    },
+    "llm_security": {
+      "prompt_injection": "외부 입력값 sanitize_input() 통과 후 프롬프트 삽입",
+      "system_prompt": "환경변수 또는 context JSON에서 로드 (하드코딩 금지)",
+      "response_validation": "LLM 응답 validate_response() 통과 후 반환"
+    },
+    "forbidden": [
+      "API Key, Secret, 비밀번호 코드에 직접 작성",
+      "Restricted 데이터 암호화 없이 저장",
+      "외부 미검증 입력값 프롬프트에 직접 삽입",
+      "로그 삭제/수정 기능 구현",
+      "HTTP 통신으로 민감 데이터 전송"
+    ],
+    "audit_log_rules": {
+      "audit_logs_table": "INSERT only — DELETE, UPDATE 쿼리 금지",
+      "security_events":  "security_logs 별도 테이블에 기록",
+      "retention":        "보관 기간 정책에 따라 관리"
+    }
+  },
+
+  "future_standards": {
+    "description": "Phase 3 이후 적용할 표준 목록",
+    "phase3": ["0_3 멀티 에이전트 구조", "0_4 리스크 관리"],
+    "phase4_5": ["0_9 Release Gate", "0_B 예외 승인 절차"],
+    "phase5": ["0_5 KPI/모니터링"],
+    "phase6": ["0_6 Evolution Loop"]
+  }
+}

@@ -1,0 +1,204 @@
+# Naming Rule + 에러 코드 체계
+# ─────────────────────────────────────────────────────────
+# 참조: Quick Reference Card (doc3) — Section 1~4
+# 이 규칙은 코드 생성 시 네이밍 일관성을 강제한다.
+# ─────────────────────────────────────────────────────────
+
+## Python 네이밍 규칙
+
+| 대상 | 규칙 | 예시 |
+|------|------|------|
+| 변수 / 함수 | `snake_case` | `user_id`, `get_user()` |
+| 클래스 | `PascalCase` | `UserService`, `BaseAgent` |
+| 상수 | `UPPER_SNAKE_CASE` | `MAX_RETRY`, `DEFAULT_TTL` |
+| 파일 | `snake_case.py` | `auth_service.py` |
+| 비공개 메서드 | `_single_underscore` | `_validate_token()` |
+| 타입 힌트 | 100% 필수 | `def fn(x: str) -> bool:` |
+
+**금지 패턴:**
+```python
+# ❌
+def GetUser(): ...         # camelCase 함수명 금지
+class user_model: ...      # snake_case 클래스명 금지
+x: Any = ...               # Any 타입 사용 금지
+def fn(data):              # 타입 힌트 누락 금지
+    pass
+```
+
+---
+
+## TypeScript 네이밍 규칙
+
+| 대상 | 규칙 | 예시 |
+|------|------|------|
+| 변수 / 함수 | `camelCase` | `userId`, `getUser()` |
+| 컴포넌트 | `PascalCase` | `UserCard`, `AgentChat` |
+| 타입 / 인터페이스 | `PascalCase` | `UserProfile`, `ApiResponse` |
+| 상수 | `UPPER_SNAKE_CASE` | `MAX_RETRY`, `API_BASE_URL` |
+| 파일 (컴포넌트) | `PascalCase.tsx` | `UserCard.tsx` |
+| 파일 (훅/유틸) | `camelCase.ts` | `useAuth.ts`, `formatDate.ts` |
+| 이벤트 핸들러 | `handle` 접두사 | `handleSubmit`, `handleClick` |
+
+**금지 패턴:**
+```typescript
+// ❌
+interface IUserProfile { ... }    // I 접두사 금지
+enum UserStatus { ... }           // enum 금지 → as const 사용
+const x: any = ...                // any 금지
+console.log(...)                  // console.log 금지 (경고 → CI 실패)
+
+// ✅ 올바른 대안
+interface UserProfile { ... }     // I 접두사 없이
+const USER_STATUS = {             // as const 패턴
+  ACTIVE: 'active',
+  INACTIVE: 'inactive',
+} as const;
+type UserStatus = typeof USER_STATUS[keyof typeof USER_STATUS];
+```
+
+---
+
+## DB 네이밍 규칙
+
+| 대상 | 규칙 | 예시 |
+|------|------|------|
+| 테이블 | `복수형_snake_case` | `users`, `agent_runs`, `audit_logs` |
+| 컬럼 | `snake_case` | `user_id`, `created_at` |
+| Boolean 컬럼 | `is_` 접두사 | `is_active`, `is_deleted`, `is_verified` |
+| 날짜 컬럼 | `_at` 접미사 | `created_at`, `deleted_at`, `last_login_at` |
+| FK 컬럼 | `{table_단수}_id` | `user_id`, `organization_id`, `agent_id` |
+| 인덱스 | `idx_{테이블}_{컬럼}` | `idx_users_email`, `idx_agents_org_id` |
+| UK 제약 | `uq_{테이블}_{컬럼}` | `uq_users_email`, `uq_orgs_slug` |
+| PK | UUID v4 (항상) | `id UUID DEFAULT gen_random_uuid()` |
+
+---
+
+## 공개 ID (노출용) 채번 규칙
+
+DB PK(UUID)와 별개로 사용자에게 노출하는 ID는 아래 형식을 따른다.
+
+```
+PREFIX-YYYYMMDD-SEQ(5자리)
+
+예시:
+  AGT-20260308-00001   Agent
+  RUN-20260308-00042   AgentRun
+  ORG-20260308-00003   Organization
+  USR-20260308-00017   User
+  INV-20260308-00005   Invoice
+  WHK-20260308-00002   Webhook
+```
+
+| PREFIX | 도메인 |
+|--------|--------|
+| `AGT` | Agent |
+| `RUN` | AgentRun |
+| `ORG` | Organization |
+| `USR` | User |
+| `INV` | Invoice |
+| `WHK` | Webhook |
+
+**API Token 형식:** `sk_{env}_{32자리_random}`
+예: `sk_prod_a1b2c3d4e5f6...` → SHA-256 해시 후 DB 저장
+
+---
+
+## 에러 코드 체계 (전체)
+
+형식: `ERR_{DOMAIN}_{3자리숫자}`
+
+### 인증 (ERR_AUTH)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_AUTH_001` | 인증 토큰 없음 / 형식 오류 | 401 |
+| `ERR_AUTH_002` | 토큰 만료 | 401 |
+| `ERR_AUTH_003` | 이메일 또는 비밀번호 불일치 | 401 |
+| `ERR_AUTH_004` | 권한 없음 (Role 미달) | 403 |
+| `ERR_AUTH_005` | 플랜 미달 (기능 제한) | 403 |
+| `ERR_AUTH_006` | 로그인 시도 횟수 초과 | 429 |
+
+### 사용자 (ERR_USER)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_USER_001` | 이미 존재하는 이메일 | 409 |
+| `ERR_USER_002` | 존재하지 않는 사용자 | 404 |
+| `ERR_USER_003` | 비밀번호 정책 위반 | 422 |
+
+### 조직 (ERR_ORG)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_ORG_001` | 이미 존재하는 조직 슬러그 | 409 |
+| `ERR_ORG_002` | 존재하지 않는 조직 | 404 |
+| `ERR_ORG_003` | 조직 멤버가 아님 | 403 |
+| `ERR_ORG_004` | 초대 토큰 만료 또는 무효 | 422 |
+
+### 데이터 (ERR_DATA)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_DATA_001` | 리소스를 찾을 수 없음 | 404 |
+| `ERR_DATA_002` | 중복 리소스 | 409 |
+| `ERR_DATA_003` | 유효성 검사 실패 | 422 |
+
+### AI Agent (ERR_AGENT)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_AGENT_001` | Agent를 찾을 수 없음 | 404 |
+| `ERR_AGENT_002` | Agent 실행 타임아웃 | 503 |
+| `ERR_AGENT_003` | Guardrail 차단 | 422 |
+| `ERR_AGENT_004` | Agent 비활성화 상태 | 403 |
+| `ERR_AGENT_005` | 최대 반복 횟수 초과 | 422 |
+
+### 파일 (ERR_FILE)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_FILE_001` | 허용되지 않는 파일 형식 | 422 |
+| `ERR_FILE_002` | 파일 크기 초과 | 413 |
+
+### 결제 (ERR_BILL)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_BILL_001` | 결제 수단 없음 | 402 |
+| `ERR_BILL_002` | 결제 처리 실패 | 402 |
+
+### 시스템 (ERR_SYS)
+| 코드 | 상황 | HTTP |
+|------|------|------|
+| `ERR_SYS_001` | 내부 서버 오류 | 500 |
+| `ERR_SYS_002` | 외부 서비스 연동 실패 | 502 |
+
+---
+
+## 도메인 이벤트 네이밍
+
+형식: `{resource}.{action}`
+
+```python
+# 예시
+"agent.created"
+"agent.run.started"
+"agent.run.completed"
+"agent.run.failed"
+"user.registered"
+"user.login.success"
+"user.login.failed"
+"organization.member.invited"
+"organization.plan.upgraded"
+"audit.guardrail.triggered"
+```
+
+---
+
+## Cursor 체크리스트 (코드 생성 전 반드시 확인)
+
+```
+□ Python 함수명이 snake_case인가?
+□ TypeScript 타입에 I 접두사가 없는가?
+□ enum 대신 as const를 사용했는가?
+□ any 타입을 사용하지 않았는가?
+□ DB 테이블명이 복수형인가?
+□ Boolean 컬럼에 is_ 접두사가 있는가?
+□ 날짜 컬럼에 _at 접미사가 있는가?
+□ PK가 UUID인가? (Integer 사용 금지)
+□ 에러 코드가 ERR_{DOMAIN}_{3자리} 형식인가?
+□ 도메인 이벤트가 {resource}.{action} 형식인가?
+```

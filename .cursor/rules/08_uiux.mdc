@@ -1,0 +1,363 @@
+# UI/UX 설계 기준 및 컴포넌트 규칙
+# ─────────────────────────────────────────────────────────
+# 참조: .cursor/context/saas_foundation.json (design_system)
+#       .cursor/context/persona_context.json
+#       frontend/src/types/governance.ts     ← Agent 타입 단일 출처
+#       frontend/src/hooks/useAgent.ts       ← Agent 호출 단일 경로
+# 기반 문서: 0_1_5 UI_UX_Design_Guide.md
+# 우선순위: 01_principles.mdc > 02_security.mdc > 이 파일
+# ─────────────────────────────────────────────────────────
+
+## 이 파일의 역할
+
+UI/UX Design Guide (Phase 0 doc5)에서 결정된 디자인·컴포넌트 기준을
+Cursor가 Frontend 코드 생성 시 반드시 따르도록 강제한다.
+설계 이유는 0_1_5_UI_UX_Design_Guide.md 참조.
+
+---
+
+## 규칙 1 — 컴포넌트 사용 우선순위 (절대 준수)
+
+신규 UI를 만들기 전에 반드시 아래 순서로 확인한다.
+
+```
+1순위: shadcn/ui 기본 컴포넌트가 있는가?
+         → 있으면 반드시 래핑(wrapper)해서 사용. 직접 수정 금지.
+
+2순위: components/ui/ 내 공통 컴포넌트가 있는가?
+         → 있으면 재사용. 중복 생성 금지.
+
+3순위: 위 둘 다 없을 때만 신규 생성.
+         → 생성 위치: components/ui/ (공통) 또는 components/[domain]/ (도메인)
+```
+
+---
+
+## 규칙 2 — 디자인 토큰 (색상·간격·타이포)
+
+```tsx
+// ✅ CSS 변수 + Tailwind 클래스 사용
+<div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+                border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+
+// ✅ Risk Level 색상 — 반드시 아래 매핑 사용
+// LOW      → bg-gray-50   text-gray-600   border-gray-200
+// MEDIUM   → bg-yellow-50 text-yellow-700 border-yellow-300
+// HIGH     → bg-orange-50 text-orange-700 border-orange-400
+// CRITICAL → bg-red-50    text-red-700    border-red-500
+
+// ❌ 절대 금지 — 하드코딩 색상
+<div style={{ backgroundColor: '#ffffff', color: '#111827' }}>
+<div className="text-[#2563EB]">   // 임의 hex 금지
+```
+
+---
+
+## 규칙 3 — 공통 컴포넌트 사용 규칙
+
+### Button
+```tsx
+// ✅ variant 반드시 명시
+<Button variant="primary">저장</Button>
+<Button variant="destructive" isLoading={isDeleting}>삭제</Button>
+<Button variant="ghost" aria-label="편집">  // 아이콘만 있으면 aria-label 필수
+  <PencilIcon />
+</Button>
+
+// ❌ 금지
+<button className="bg-blue-600 ...">     // 네이티브 button 직접 사용 금지
+<Button disabled={isLoading}>           // disabled 직접 제어 금지 → isLoading 사용
+```
+
+### 비가역 액션 (삭제·배포·전송)
+```tsx
+// ✅ destructive variant + ApprovalGate 조합 필수
+<ApprovalGate pattern="P1" level="L1" traceId={traceId} ...>
+  <Button variant="destructive">DB 스키마 변경</Button>
+</ApprovalGate>
+
+// ❌ 금지
+window.confirm("삭제하시겠습니까?")    // confirm 절대 금지
+<Button variant="primary">삭제</Button>  // destructive 아닌 다른 variant로 삭제 처리 금지
+```
+
+### 로딩 상태
+```tsx
+// ✅ Skeleton 사용 (레이아웃 이동 방지)
+{isLoading ? <SkeletonTable rows={5} /> : <DataTable ... />}
+{isLoading ? <SkeletonCard /> : <SummaryCard ... />}
+
+// ❌ 금지
+{isLoading && <Spinner />}    // Spinner 단독 사용 금지
+```
+
+### 빈 상태 / 에러 상태
+```tsx
+// ✅ EmptyState 컴포넌트 필수
+{data.length === 0 && (
+  <EmptyState
+    title="데이터가 없습니다"
+    description="첫 번째 항목을 추가해보세요"
+    action={<Button variant="primary">추가</Button>}
+  />
+)}
+
+// 에러
+{isError && (
+  <EmptyState variant="error" title="불러오기 실패"
+    description={error.message}
+    action={<Button variant="secondary" onClick={refetch}>다시 시도</Button>} />
+)}
+```
+
+---
+
+## 규칙 4 — Form / 유효성 검사
+
+```tsx
+// ✅ react-hook-form + zod 조합 필수
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+
+const schema = z.object({
+  name: z.string().min(1, '이름을 입력하세요'),
+})
+
+const { register, handleSubmit, formState: { errors } } = useForm({
+  resolver: zodResolver(schema),
+})
+
+// ✅ FormField 공통 컴포넌트 사용 (label + input + error 통합)
+<FormField label="이름" name="name" register={register}
+  error={errors.name} required />
+
+// ❌ 금지
+<input onChange={(e) => setName(e.target.value)} />   // 비제어 컴포넌트 금지
+if (!name) alert("이름을 입력하세요")                  // alert 금지
+```
+
+---
+
+## 규칙 5 — AI Agent 전용 UI 필수 적용
+
+### 비가역 Agent 액션 전 ApprovalGate 필수
+```tsx
+// ✅ Risk HIGH 이상 액션에 반드시 ApprovalGate 적용
+import { ApprovalGate } from '@/components/ApprovalGate'
+
+<ApprovalGate
+  pattern="P1"         // 실행 전
+  level="L1"
+  traceId={traceId}
+  agentCode="Back-A"
+  actionLabel="DB 스키마 변경 (G-06)"
+  riskLevel="HIGH"
+  onApprove={handleApprove}
+  onReject={handleReject}
+>
+  {/* 승인 후 표시될 콘텐츠 */}
+</ApprovalGate>
+```
+
+### Agent 실행 상태 표시 필수
+```tsx
+// ✅ Agent 관련 화면에는 AgentStatusBadge 반드시 포함
+<AgentStatusBadge status={agentStatus} agentCode="Back-A" />
+
+// ✅ 실행 이력 화면에는 ExecutionTimeline 사용
+<ExecutionTimeline traceId={traceId} steps={executionSteps} />
+
+// ✅ Risk HIGH 이상 화면 상단에 RiskBanner 표시
+{riskLevel === 'HIGH' || riskLevel === 'CRITICAL' ? (
+  <RiskBanner riskLevel={riskLevel} traceId={traceId} />
+) : null}
+```
+
+### Agent API 호출 — useAgent 훅 경유 필수
+```tsx
+// ✅ 반드시 useAgent 훅 사용
+import { useAgent } from '@/hooks/useAgent'
+
+const { run, isLoading, approvalState } = useAgent()
+await run({ agent_code: 'Back-A', action: 'schema.change',
+            payload: {}, risk_level: 'HIGH' })
+
+// ❌ 절대 금지
+fetch('/api/v1/agents/invoke', { ... })    // 직접 fetch 금지
+axios.post('/api/v1/agents/invoke', ...)  // 직접 axios 금지
+```
+
+---
+
+## 규칙 6 — TypeScript 타입 규칙
+
+```tsx
+// ✅ governance.ts에서 import
+import type { AgentRequest, RiskLevel, ApprovalStatus } from '@/types/governance'
+import type { ApiResponse, PaginatedResponse } from '@/types/api'
+
+// ✅ props 타입 명시 (interface 사용, I 접두사 금지)
+interface MyComponentProps {
+  riskLevel: RiskLevel         // governance.ts 타입 재사용
+  onApprove: (id: string) => void
+}
+
+// ❌ 절대 금지
+const data: any = response.data        // any 금지
+interface IMyProps { ... }             // I 접두사 금지
+type Status = 'a' | 'b' | 'c'         // governance.ts에 이미 있으면 재선언 금지
+enum UserStatus { Active, Inactive }  // enum 금지 → as const 사용
+```
+
+---
+
+## 규칙 7 — 다크모드
+
+```tsx
+// ✅ 모든 컴포넌트에 dark: 클래스 포함 필수
+<div className="bg-white dark:bg-gray-900
+                text-gray-900 dark:text-gray-100
+                border-gray-200 dark:border-gray-700">
+
+// ✅ 아이콘·이미지 다크모드 대응
+<img src={logo} className="dark:invert" alt="로고" />
+
+// ❌ 금지
+<div style={{ backgroundColor: theme === 'dark' ? '#111' : '#fff' }}>  // 인라인 스타일 금지
+```
+
+---
+
+## 규칙 8 — 접근성 (WCAG 2.1 AA 필수)
+
+```tsx
+// ✅ 아이콘 버튼 aria-label 필수
+<button aria-label="삭제"><TrashIcon /></button>
+
+// ✅ 폼 label-input 연결 필수
+<label htmlFor="email">이메일</label>
+<input id="email" type="email" />
+
+// ✅ 포커스 링 필수 (제거 금지)
+className="focus-visible:ring-2 focus-visible:ring-blue-500"
+
+// ✅ 에러는 색상 + 아이콘 + 텍스트 조합 (색상만 사용 금지)
+<span className="text-red-500 flex items-center gap-1">
+  <ErrorIcon /> {errorMessage}
+</span>
+
+// ✅ 최소 클릭 영역 44×44px
+className="min-w-[44px] min-h-[44px]"
+
+// ❌ 금지
+<div onClick={handleClick}>          // div 클릭 이벤트 금지 → button 사용
+className="outline-none focus:outline-none"  // 포커스 링 제거 절대 금지
+```
+
+---
+
+## 규칙 9 — 컴포넌트 파일 구조 표준
+
+```tsx
+// ✅ 표준 파일 구조 (반드시 준수)
+// 1. 외부 라이브러리 import
+import { useState, useCallback } from 'react'
+// 2. 내부 컴포넌트 import
+import { Button } from '@/components/ui/Button'
+import { ApprovalGate } from '@/components/ApprovalGate'
+// 3. 훅 import
+import { useAgent } from '@/hooks/useAgent'
+// 4. 타입 import (type 키워드 명시)
+import type { RiskLevel } from '@/types/governance'
+
+// 5. 타입 정의 (컴포넌트 바로 위)
+interface MyComponentProps {
+  riskLevel: RiskLevel
+}
+
+// 6. 컴포넌트 (default export)
+export default function MyComponent({ riskLevel }: MyComponentProps) {
+  // 6-1. 훅 (최상단)
+  const { run, isLoading } = useAgent()
+  const [isOpen, setIsOpen] = useState(false)
+
+  // 6-2. 핸들러 (useCallback 사용)
+  const handleSubmit = useCallback(async () => { ... }, [])
+
+  // 6-3. 조기 반환 (로딩·에러 상태)
+  if (isLoading) return <SkeletonCard />
+
+  // 6-4. render
+  return ( ... )
+}
+```
+
+---
+
+## 화면 유형별 필수 컴포넌트
+
+| 화면 유형 | 필수 포함 컴포넌트 |
+|----------|-----------------|
+| 목록 페이지 | `FilterBar` + `DataTable` + `Pagination` + `EmptyState` |
+| 상세 페이지 | `PageHeader(breadcrumb)` + 탭(`기본정보/이력/감사로그`) |
+| 폼 페이지 | `FormField` + `ApprovalGate(HIGH↑)` + 이탈 경고 |
+| 대시보드 | KPI 카드 + `AgentStatusBadge` + `RiskBanner(HIGH↑)` |
+| Agent 실행 화면 | `ExecutionTimeline` + `DecisionGateIndicator` + `AuditLogTable` |
+
+---
+
+## Cursor 생성 금지 목록
+
+---
+
+## 규칙 10 — 모바일 코드 생성 규칙
+
+```
+모바일 전용 파일 위치:   app/m/*           (라우팅)
+                        components/mobile/ (전용 컴포넌트)
+데스크탑 공통 파일 위치: components/ui/     (수정 금지)
+```
+
+```tsx
+// ✅ 모바일 전용 컴포넌트는 components/mobile/ 에 생성
+// MobileApprovalCard, MobileHeader, MobileBottomNav 등
+
+// ✅ 터치 영역 최소 48×48px
+className="min-h-[48px] min-w-[48px]"
+
+// ✅ 입력 필드 폰트 16px 이상 (iOS 자동 확대 방지)
+className="text-base"
+
+// ✅ 모바일에서 DataTable → CardList 대체
+{isMobile ? <CardList items={data} /> : <DataTable columns={...} />}
+
+// ❌ 모바일에서 금지
+// hover:만으로 인터랙션 처리 (터치 없음)
+// components/ui/ 파일 직접 수정
+// 데스크탑용 AppLayout을 /m/* 경로에서 사용
+// 폼 입력·설정 변경·Agent 실행 기능 (Phase 2 이후)
+```
+
+| 금지 패턴 | 이유 | 올바른 대안 |
+|-----------|------|------------|
+| `components/ui/` 모바일 분기 추가 | 데스크탑 품질 저하 | `components/mobile/` 별도 파일 |
+| `hover:` 단독 인터랙션 | 터치 기기에 hover 없음 | `active:` 또는 `onClick` |
+| 입력 필드 `text-sm`(14px) | iOS 자동 확대 | `text-base`(16px) 이상 |
+
+---
+
+## Cursor 생성 금지 목록 (전체)
+
+| 금지 패턴 | 이유 | 올바른 대안 |
+|-----------|------|------------|
+| `style={{ color: '#...' }}` | 토큰 정책 위반 | CSS 변수 + Tailwind |
+| `const x: any` | 타입 정책 위반 | 구체적 타입 |
+| `interface IFoo` | 네이밍 정책 위반 | `interface Foo` |
+| `enum Status { }` | TypeScript 정책 위반 | `as const` |
+| `window.confirm()` | 승인 UX 정책 위반 | `<ApprovalGate>` |
+| `<Spinner />` 단독 | 로딩 UX 정책 위반 | `<Skeleton>` |
+| `fetch('/api/v1/agents/...')` | Agent 호출 정책 위반 | `useAgent().run()` |
+| `outline-none focus:outline-none` | 접근성 정책 위반 | `focus-visible:ring-2` |
+| shadcn/ui 소스 직접 수정 | 컴포넌트 정책 위반 | 래퍼 컴포넌트 생성 |
+| `governance.ts` 타입 재선언 | 타입 단일 출처 위반 | `governance.ts`에서 import |

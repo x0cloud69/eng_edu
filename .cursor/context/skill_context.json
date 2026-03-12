@@ -1,0 +1,313 @@
+{
+  "_meta": {
+    "document": "Phase 3. Capability 구축 — 3.2.1 Skill Library",
+    "phase": "Phase 3 - Capability 구축",
+    "version": "v1.0",
+    "created_by": "KY Song",
+    "date": "2026",
+    "description": "Cursor AI가 Skill 코드 생성 시 참조하는 기준. Skill Registry 구조, Core Skill 4개 + Domain Skill 9개, 호출 규칙 정의.",
+    "depends_on": [
+      "system_prompt_context.json",
+      "tool_context.json",
+      "governance.json",
+      "workflow_context.json",
+      "phase3_context.json",
+      "saas_foundation.json"
+    ],
+    "change_log": [
+      { "version": "v1.0", "date": "2026", "summary": "Phase 3 Skill Library 초기 생성" }
+    ]
+  },
+
+  "skill_invocation_hierarchy": {
+    "description": "Skill 호출 계층 구조. Agent는 Tool을 직접 호출할 수 없다. 반드시 이 계층을 따른다.",
+    "layers": [
+      { "level": 1, "name": "Agent",         "role": "Skill 호출 요청",           "rule": "Tool 직접 호출 절대 금지" },
+      { "level": 2, "name": "Skill Registry", "role": "Skill 등록·검증·라우팅",    "rule": "허용 Agent 검증 후 Skill 실행" },
+      { "level": 3, "name": "Skill",          "role": "비즈니스 로직 캡슐화",      "rule": "Tool Registry 경유로만 Tool 호출" },
+      { "level": 4, "name": "Tool Registry",  "role": "Tool 등록·권한 검증·실행", "rule": "allowed_agents 검증 후 Tool 실행" },
+      { "level": 5, "name": "Tool",           "role": "실제 실행 (DB/API/LLM 등)", "rule": "Tool 직접 호출 금지. Tool Registry 경유만 허용" }
+    ],
+    "invocation_flow": [
+      "① Agent.execute() → ② skill_registry.invoke(skill_name, agent_code) → ③ Skill.run() → ④ tool_registry.call(tool_name) → ⑤ Tool 실행",
+      "역방향 호출 절대 금지 (예: Tool에서 Skill 호출 금지)"
+    ],
+    "cursor_code_rule": "Agent 코드에서 Tool 직접 import 및 호출 금지. 반드시 skill_registry.invoke() 경유"
+  },
+
+  "skill_registry": {
+    "description": "Skill Registry 구조 및 DB 스키마 정의. 런타임 Skill 동적 등록 지원.",
+    "db_table": "skill_registry",
+    "columns": [
+      { "name": "id",               "type": "UUID",      "desc": "Skill 고유 ID" },
+      { "name": "skill_name",       "type": "VARCHAR",   "desc": "Skill 식별자 (예: back.generate_db_migration)" },
+      { "name": "skill_version",    "type": "VARCHAR",   "desc": "Skill 버전 (예: v1.0)" },
+      { "name": "description",      "type": "TEXT",      "desc": "Skill 목적 설명" },
+      { "name": "allowed_agents",   "type": "JSON",      "desc": "이 Skill을 사용할 수 있는 Agent 코드 목록" },
+      { "name": "requires_approval","type": "BOOLEAN",   "desc": "Human 승인 필요 여부 (P1 게이트)" },
+      { "name": "risk_level",       "type": "VARCHAR",   "desc": "Skill 실행 Risk Level (LOW/MEDIUM/HIGH/CRITICAL)" },
+      { "name": "tool_dependencies","type": "JSON",      "desc": "이 Skill이 의존하는 Tool 이름 목록" },
+      { "name": "is_active",        "type": "BOOLEAN",   "desc": "활성화 여부" },
+      { "name": "created_at",       "type": "TIMESTAMPTZ","desc": "등록 시각" }
+    ],
+    "rules": [
+      "skill_name은 {agent_prefix}.{action_name} 형식 필수 (예: back.generate_db_migration)",
+      "allowed_agents에 없는 Agent의 호출 즉시 차단",
+      "requires_approval=true인 Skill: P1 approval_requests INSERT 후 APPROVED 상태 확인 필수",
+      "Skill 추가/수정: Governance Board 승인 후 is_active=true 설정",
+      "is_active=false Skill 호출 시 SkillDisabledException 발생"
+    ]
+  },
+
+  "core_skills": {
+    "description": "모든 Phase에서 공통 사용하는 필수 Core Skill 4개. 삭제·비활성화 금지.",
+    "skills": [
+      {
+        "skill_name": "orch.route_request",
+        "version": "v1.0",
+        "description": "Orch가 수신 요청을 분석하여 적절한 Capability Agent에 라우팅.",
+        "allowed_agents": ["Orch"],
+        "requires_approval": false,
+        "risk_level": "MEDIUM",
+        "tool_dependencies": ["api_call_internal"],
+        "logic": [
+          "요청 intent 분석 (llm_call 경유)",
+          "대상 Agent 결정 (rr_matrix_context.json 기반)",
+          "Decision Gate 확인 (workflow_context.json gates)",
+          "Human 승인 필요 시 approval_requests INSERT",
+          "라우팅 결과 audit_log 기록"
+        ]
+      },
+      {
+        "skill_name": "orch.check_gate",
+        "version": "v1.0",
+        "description": "Decision Gate 통과 여부 확인 및 승인 요청 관리.",
+        "allowed_agents": ["Orch"],
+        "requires_approval": false,
+        "risk_level": "HIGH",
+        "tool_dependencies": ["db_query", "db_write", "send_notification"],
+        "logic": [
+          "gate_id로 decision_gates 조회 (workflow_context.json 기준)",
+          "hitl_pattern에 따라 P1/P2/P3 테이블 INSERT",
+          "승인 상태 폴링 (SLA 내)",
+          "APPROVED: 다음 단계 진행",
+          "REJECTED: Agent 실행 취소 + 사유 기록",
+          "TIMEOUT: 에스컬레이션 자동 트리거"
+        ]
+      },
+      {
+        "skill_name": "orch.escalate",
+        "version": "v1.0",
+        "description": "Risk 감지 또는 이상 상황 시 Human 에스컬레이션 수행.",
+        "allowed_agents": ["Orch", "Monitor-A"],
+        "requires_approval": false,
+        "risk_level": "HIGH",
+        "tool_dependencies": ["send_notification", "db_write"],
+        "logic": [
+          "trigger_type + risk_level 파라미터 검증",
+          "escalation_rules 매핑 (workflow_context.json 기준)",
+          "override_logs INSERT (P2 패턴)",
+          "수신자 알림 발송 (send_notification)",
+          "SLA 카운트다운 시작 (background job)"
+        ]
+      },
+      {
+        "skill_name": "monitor.detect_drift",
+        "version": "v1.0",
+        "description": "KPI Threshold 비교 및 Drift 자동 탐지.",
+        "allowed_agents": ["Monitor-A"],
+        "requires_approval": false,
+        "risk_level": "LOW",
+        "tool_dependencies": ["read_logs"],
+        "logic": [
+          "trajectory_logs에서 최근 kpi_metrics 조회",
+          "project_context.json KPI 목표값 대비 편차 계산",
+          "alert_threshold (10~20% 하락) 도달 시 알림",
+          "detection_threshold (20% 이상 하락) 도달 시 orch.escalate 트리거",
+          "탐지 결과 audit_log 기록"
+        ]
+      }
+    ]
+  },
+
+  "domain_skills": {
+    "description": "Phase 3 구현에 필요한 Domain Skill 9개. Agent별 전용 Skill.",
+    "skills": [
+      {
+        "skill_name": "back.generate_db_migration",
+        "version": "v1.0",
+        "description": "Alembic DB Migration 파일 자동 생성. P1 Human 승인(G-06) 필수.",
+        "allowed_agents": ["Back-A"],
+        "requires_approval": true,
+        "risk_level": "HIGH",
+        "hitl_gate": "G-06",
+        "tool_dependencies": ["llm_call", "db_write", "file_write"],
+        "logic": [
+          "현재 DB 스키마 조회 (db_query)",
+          "변경 사항 분석 (llm_call — saas_foundation.json DB 규칙 기반)",
+          "Alembic migration 파일 초안 생성",
+          "P1 approval_requests INSERT (G-06 Gate) → 승인 대기",
+          "APPROVED 후 migration 파일 write",
+          "audit_log INSERT (action='db.migration.generated')"
+        ],
+        "constraints": [
+          "물리 DELETE 컬럼 금지 → SoftDelete(deleted_at) 패턴 사용",
+          "UUID PK 외 Integer PK 생성 금지",
+          "tenant_id 누락 테이블 생성 금지"
+        ]
+      },
+      {
+        "skill_name": "back.generate_agent_code",
+        "version": "v1.0",
+        "description": "BaseAgent 상속 Python Agent 클래스 코드 자동 생성.",
+        "allowed_agents": ["Back-A"],
+        "requires_approval": false,
+        "risk_level": "MEDIUM",
+        "tool_dependencies": ["llm_call", "file_write"],
+        "logic": [
+          "phase3_context.json agent_template 기반 코드 생성",
+          "system_prompt_context.json G-00-1~8 Guardrail 포함",
+          "Injection 방어 패턴 INJ-01~05 적용",
+          "P3 review_requests INSERT → Human 검수 대기",
+          "audit_log INSERT (action='agent.code.generated')"
+        ],
+        "constraints": [
+          "BaseAgent 상속 없는 Agent 클래스 생성 금지",
+          "execute() 함수 외부에서 직접 Tool 호출 금지",
+          "G-00-1~8 Guardrail 중 하나라도 누락 시 생성 거부"
+        ]
+      },
+      {
+        "skill_name": "back.generate_api_endpoint",
+        "version": "v1.0",
+        "description": "FastAPI 엔드포인트 코드 생성. 표준 응답 포맷·인증·audit_log 포함.",
+        "allowed_agents": ["Back-A"],
+        "requires_approval": false,
+        "risk_level": "MEDIUM",
+        "tool_dependencies": ["llm_call", "file_write"],
+        "logic": [
+          "06_api_patterns.mdc REST 패턴 기반 엔드포인트 생성",
+          "TenantContext 의존성 주입 자동 포함",
+          "ApiResponse / PaginatedResponse 응답 포맷 적용",
+          "organization_id 필터 자동 포함",
+          "audit_log 기록 코드 자동 포함",
+          "P3 review_requests INSERT → Human 검수 대기"
+        ]
+      },
+      {
+        "skill_name": "back.validate_schema",
+        "version": "v1.0",
+        "description": "Pydantic 스키마 유효성 검증 및 표준 준수 여부 확인.",
+        "allowed_agents": ["Back-A", "Test-A"],
+        "requires_approval": false,
+        "risk_level": "LOW",
+        "tool_dependencies": ["llm_call"],
+        "logic": [
+          "Pydantic v2 model_validate() 기반 검증",
+          "saas_implementation.json forbidden_patterns 대조",
+          "any 타입 사용 여부 확인",
+          "I 접두사 interface 사용 여부 확인",
+          "검증 결과 반환 (pass/fail + 위반 항목 목록)"
+        ]
+      },
+      {
+        "skill_name": "front.generate_component",
+        "version": "v1.0",
+        "description": "08_uiux.mdc 규칙 기반 React 컴포넌트 코드 생성.",
+        "allowed_agents": ["Front-A"],
+        "requires_approval": false,
+        "risk_level": "MEDIUM",
+        "tool_dependencies": ["llm_call", "file_write"],
+        "logic": [
+          "08_uiux.mdc 규칙 (컴포넌트 우선순위, 토큰, 접근성) 적용",
+          "TypeScript strict 모드 적용 (any 타입 금지)",
+          "governance.ts 타입 import (재선언 금지)",
+          "WCAG 2.1 AA 접근성 규칙 적용",
+          "P3 review_requests INSERT → Human 검수 대기"
+        ]
+      },
+      {
+        "skill_name": "front.generate_approval_gate",
+        "version": "v1.0",
+        "description": "비가역 액션 전 ApprovalGate 컴포넌트 코드 생성.",
+        "allowed_agents": ["Front-A"],
+        "requires_approval": false,
+        "risk_level": "MEDIUM",
+        "tool_dependencies": ["llm_call", "file_write"],
+        "logic": [
+          "hitl_context.json P1/P2/P3 패턴 기반 컴포넌트 생성",
+          "traceId + agentCode + riskLevel props 포함",
+          "onApprove + onReject 핸들러 포함",
+          "window.confirm() 대체 금지 확인",
+          "P3 review_requests INSERT → Human 검수 대기"
+        ]
+      },
+      {
+        "skill_name": "test.run_simulation",
+        "version": "v1.0",
+        "description": "Multi-Agent Simulation 자동 실행 및 Simulation Log 생성. P1 승인 필수.",
+        "allowed_agents": ["Test-A"],
+        "requires_approval": true,
+        "risk_level": "MEDIUM",
+        "hitl_gate": "G-07",
+        "tool_dependencies": ["run_test", "read_logs", "db_write"],
+        "logic": [
+          "Test Scenario 로드 (approval_requests에서 승인된 시나리오 기준)",
+          "Simulation 실행 (run_test Tool)",
+          "Conversation Log 생성",
+          "KPI 측정 및 집계 (test.measure_kpi 호출)",
+          "trajectory_logs INSERT (kpi_metrics 포함)",
+          "Evaluation Report 초안 생성",
+          "P3 review_requests INSERT → Human 확정 대기"
+        ]
+      },
+      {
+        "skill_name": "evol.propose_improvement",
+        "version": "v1.0",
+        "description": "trajectory_logs 분석 후 Context/Workflow 개선 제안서 자동 생성. P1 승인 필수.",
+        "allowed_agents": ["Evol-A"],
+        "requires_approval": true,
+        "risk_level": "HIGH",
+        "hitl_gate": "G-09",
+        "tool_dependencies": ["read_logs", "llm_call"],
+        "logic": [
+          "trajectory_logs에서 failure_tagged=true 항목 집계",
+          "패턴 분석 (llm_call — 반복 실패 유형 분류)",
+          "Context 수정 제안서 초안 작성",
+          "P1 approval_requests INSERT (G-09 Gate) → 승인 대기",
+          "APPROVED 후 P3 review_requests INSERT → Governance Board 검토",
+          "제안서는 읽기 전용. Context 직접 수정 절대 금지"
+        ]
+      },
+      {
+        "skill_name": "monitor.generate_report",
+        "version": "v1.0",
+        "description": "audit_logs 집계 기반 감사 대응 보고서 자동 생성.",
+        "allowed_agents": ["Monitor-A"],
+        "requires_approval": false,
+        "risk_level": "LOW",
+        "tool_dependencies": ["read_logs"],
+        "logic": [
+          "audit_logs SELECT (조회만. INSERT/UPDATE/DELETE 금지)",
+          "기간별 Agent 실행 통계 집계",
+          "이상 항목 (AUTHORITY_EXCEEDED, SCOPE_EXCEEDED 등) 추출",
+          "PDF/JSON 형식 보고서 생성",
+          "P3 review_requests INSERT → Human 확정 후 제출"
+        ]
+      }
+    ]
+  },
+
+  "cursor_code_rules": {
+    "description": "Cursor가 Skill 관련 코드 생성 시 반드시 준수하는 규칙",
+    "rules": [
+      "Agent 코드에서 Tool 직접 import/호출 절대 금지 → 반드시 skill_registry.invoke() 경유",
+      "새 Skill 생성 시 skill_registry 테이블 INSERT 코드 포함 필수",
+      "requires_approval=true Skill: P1 approval_requests INSERT → APPROVED 확인 로직 포함 필수",
+      "skill_name 형식: {agent_prefix}.{action_name} 필수 (예: back.generate_db_migration)",
+      "Skill 내부 Tool 호출: tool_registry.call(tool_name) 경유 필수",
+      "allowed_agents 외 Agent 호출 시 SkillAccessException 발생 코드 포함",
+      "P1 필수 Skill(back.generate_db_migration, test.run_simulation, evol.propose_improvement): approval_requests 없이 실행하는 코드 생성 금지"
+    ]
+  }
+}

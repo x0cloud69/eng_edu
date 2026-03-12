@@ -1,0 +1,393 @@
+{
+  "_meta": {
+    "document": "1.1 Governance Rules",
+    "phase": "Phase 1 - Vision & Role 정의",
+    "project": "Standard Framework",
+    "version": "v1.0",
+    "author": "KY Song",
+    "created_at": "2026-03-09",
+    "source": "WBS/Methdology/1. Vision and Role/1.1 Problem Framing/1_1_Governance_Rules.md",
+    "description": "AI 리스크 임계값·완화 규칙, Zero-Trust 검증 규칙, Risk-Based Approval 결정 매트릭스. Cursor가 코드 생성 시 참조한다.",
+    "related_files": [
+      ".cursor/context/governance.json          ← Authority Level (L0-L3) 정의",
+      ".cursor/context/governance_charter.json  ← 5원칙, 데이터 분류, 금지 행동",
+      ".cursor/context/hitl_context.json        ← P1/P2/P3 패턴, DB 스키마, SLA"
+    ],
+    "change_log": [
+      {
+        "version": "v1.0",
+        "date": "2026-03-09",
+        "summary": "AI 리스크 관리 원칙, Zero-Trust 설계 원칙, Risk-Based Approval 결정 매트릭스 초기 생성"
+      }
+    ]
+  },
+
+  "ai_risk_management": {
+    "_description": "AI 리스크 유형별 탐지 임계값 및 완화 규칙. Cursor는 코드 생성 시 각 리스크 완화 전략을 코드에 반영한다.",
+    "risks": [
+      {
+        "id": "RISK-01",
+        "type": "Bias",
+        "severity": "HIGH",
+        "detection_threshold": "집단 간 결과 편차 ±10% 초과",
+        "alert_threshold": "집단 간 결과 편차 ±5~10%",
+        "acceptable_level": "±5% 이내",
+        "mitigation_rules": [
+          "모든 예측/분류 결과에 fairness_check() 검증 로직 포함",
+          "결과 집단 분포 통계를 audit_logs에 함께 기록",
+          "분기 1회 Bias 감사 스케줄 자동 등록"
+        ],
+        "cursor_code_rules": [
+          "AI 분류·추천 함수에 fairness_check(result, groups) 호출 필수",
+          "집단별 결과 분포를 audit_logs.bias_metrics 필드에 기록",
+          "Bias 임계값 초과 시 BiasTresholdException 발생 → Orchestrator 에스컬레이션"
+        ],
+        "owner": "AI Architect + Compliance Officer"
+      },
+      {
+        "id": "RISK-02",
+        "type": "Hallucination",
+        "severity": "HIGH",
+        "detection_threshold": "사실 검증 실패율 5% 초과",
+        "alert_threshold": "사실 검증 실패율 1~5%",
+        "acceptable_level": "검증 실패율 1% 미만",
+        "mitigation_rules": [
+          "모든 LLM 응답에 validate_response() 필수 적용",
+          "중요 의사결정에 LLM 단독 출력 사용 금지 — RAG 또는 Human 검토 필수",
+          "검증 실패 응답은 audit_logs에 hallucination_detected=true 기록 후 Human 에스컬레이션"
+        ],
+        "cursor_code_rules": [
+          "LLM 호출 후 반드시 validate_response(response) 통과 후 반환",
+          "validate_response() 실패 시 HallucinationException → Human 승인 게이트",
+          "LLM 응답을 직접 DB 저장 또는 외부 전달 금지 — 검증 후에만 허용"
+        ],
+        "owner": "Back-A + Human Reviewer"
+      },
+      {
+        "id": "RISK-03",
+        "type": "Explainability",
+        "severity": "CRITICAL",
+        "detection_threshold": "의사결정 설명 성공률 < 90%",
+        "alert_threshold": "해당 없음 (100% 필수)",
+        "acceptable_level": "사용자 영향 의사결정 100% 설명 가능",
+        "mitigation_rules": [
+          "모든 AI 의사결정에 decision_basis 필드 기록 필수",
+          "설명 불가 의사결정은 AI가 아닌 Human이 직접 결정",
+          "배포 전 Explainability 검증 체크리스트 통과 필수"
+        ],
+        "cursor_code_rules": [
+          "audit_logs에 decision_basis 필드 항상 포함 (null 불허)",
+          "AgentResult에 explanation 필드 필수 (빈 문자열 금지)",
+          "설명 생성 실패 시 배포 차단 — ExplainabilityException 발생"
+        ],
+        "owner": "AI Architect + Governance Board"
+      },
+      {
+        "id": "RISK-04",
+        "type": "Drift",
+        "severity": "MEDIUM_TO_HIGH",
+        "detection_threshold": "KPI 목표 대비 20% 이상 하락",
+        "alert_threshold": "KPI 목표 대비 10~20% 하락",
+        "acceptable_level": "KPI 목표 대비 ±10% 이내",
+        "mitigation_rules": [
+          "Monitor-A를 통한 실시간 KPI 모니터링 (trajectory_logs 연계)",
+          "Drift 탐지 시 자동 알림 → Evolution Agent 제안 → Board 검토",
+          "월 1회 정기 모델 성능 재검증 스케줄 유지"
+        ],
+        "cursor_code_rules": [
+          "모든 Agent 실행 결과를 trajectory_logs에 kpi_metrics 함께 기록",
+          "KPI 임계값 초과 탐지 로직을 Monitor-A와 연동 필수",
+          "Drift 감지 시 DriftDetectedException → Orchestrator → Evolution Agent 트리거"
+        ],
+        "owner": "Monitor-A + Evolution Agent + AI Architect"
+      },
+      {
+        "id": "RISK-05",
+        "type": "Ethics_Accountability",
+        "severity": "CRITICAL",
+        "detection_threshold": "윤리 민원 1건 발생 시 즉시",
+        "alert_threshold": "해당 없음 (1건도 즉시 대응)",
+        "acceptable_level": "Human 책임 귀속 구조 100% 유지 — 예외 없음",
+        "mitigation_rules": [
+          "모든 최종 결정은 Human에 귀속 (Agent는 Accountable 역할 불가)",
+          "윤리 영향 평가를 배포 전 필수 수행 — Compliance Officer 참여",
+          "Human Override는 언제든지 가능 (이유 불필요, 3초 내 전체 중단)"
+        ],
+        "cursor_code_rules": [
+          "모든 실행 결과에 accountable_human_id 필드 필수 (AI ID 불허)",
+          "Compliance Officer 승인 없이 외부 사용자 영향 기능 배포 금지",
+          "Human Override 엔드포인트는 모든 Agent API에 포함 필수"
+        ],
+        "owner": "Compliance Officer + Business Owner"
+      }
+    ],
+    "risk_assessment_procedure": {
+      "steps": [
+        "1단계 탐지: Monitor-A 또는 Human이 리스크 신호 감지 → override_logs 기록",
+        "2단계 분류: AI Architect가 리스크 유형 및 심각도 분류",
+        "3단계 완화: 해당 리스크 mitigation_rules 즉시 적용",
+        "4단계 재평가: 완화 조치 48h 후 허용 기준 내 여부 확인",
+        "5단계 기록: 전체 과정 audit_logs + trajectory_logs (failure_tagged=true)"
+      ],
+      "high_critical_immediate_action": "즉시 실행 중단 → Override 절차 적용"
+    }
+  },
+
+  "zero_trust_principles": {
+    "_description": "Zero-Trust 보안 설계 원칙. Cursor는 코드 생성 시 5원칙을 코드에 반영한다.",
+    "principles": [
+      {
+        "id": "ZT-1",
+        "name": "Identity First",
+        "ko": "신원 우선 검증",
+        "rule": "모든 요청은 발신자 신원을 먼저 검증. 내부 네트워크도 신뢰 없음.",
+        "cursor_code_rules": [
+          "모든 API 엔드포인트: JWT 토큰 검증 필수 (@require_role 또는 get_current_user)",
+          "Agent 간 통신: 서비스 토큰 검증 필수",
+          "인증 실패: audit_logs에 AUTH_FAILURE 즉시 기록"
+        ]
+      },
+      {
+        "id": "ZT-2",
+        "name": "Least Privilege",
+        "ko": "최소 권한",
+        "rule": "각 Agent/User/Service는 현재 작업에 필요한 최소 권한만 보유.",
+        "cursor_code_rules": [
+          "Agent 함수는 allowed_scope에 정의된 범위만 실행",
+          "Scope 초과 접근: 즉시 차단 + override_logs 기록",
+          "임시 권한 사용 후 즉시 만료 처리"
+        ]
+      },
+      {
+        "id": "ZT-3",
+        "name": "Micro-Segmentation",
+        "ko": "마이크로 분리",
+        "rule": "서비스는 최소 단위로 분리. 침해 시 전파 범위 제한.",
+        "cursor_code_rules": [
+          "Agent는 자신의 DB 테이블에만 직접 접근 허용",
+          "타 Agent DB 직접 접근 금지 → API Gateway 경유 필수",
+          "organization_id (tenant) 필터 모든 DB 쿼리에 필수"
+        ]
+      },
+      {
+        "id": "ZT-4",
+        "name": "Continuous Verification",
+        "ko": "지속적 검증",
+        "rule": "인증은 일회성이 아님. 실행 중에도 지속적으로 권한을 재검증.",
+        "cursor_code_rules": [
+          "장기 실행 Agent: 15분마다 Token 재검증 로직 포함",
+          "Risk Level 상승 감지 시: on_risk 체크 후 즉시 권한 재평가",
+          "모든 권한 재검증 결과: audit_logs 기록"
+        ]
+      },
+      {
+        "id": "ZT-5",
+        "name": "Assume Breach",
+        "ko": "침해 가정",
+        "rule": "시스템이 이미 침해되었다고 가정. 피해 최소화·탐지·복구 구조 우선 설계.",
+        "cursor_code_rules": [
+          "모든 외부 입력: sanitize_input() 통과 필수 (Prompt Injection 방어)",
+          "모든 LLM 출력: validate_response() 검증 후 반환",
+          "비정상 패턴 감지 시: 상태 스냅샷 저장 + Human Override 트리거"
+        ]
+      }
+    ],
+    "trust_zones": {
+      "external_zone": {
+        "entities": ["사용자 입력", "외부 API", "외부 LLM", "외부 데이터 소스"],
+        "trust_level": "없음",
+        "required_checks": ["sanitize_input()", "validate_response()", "allowlist 검사"]
+      },
+      "internal_service_zone": {
+        "entities": ["Orchestrator", "Agent 서비스", "Internal API"],
+        "trust_level": "조건부 (검증 후)",
+        "required_checks": ["서비스 토큰 검증", "RBAC 확인", "TLS 필수"]
+      },
+      "data_zone": {
+        "entities": ["PostgreSQL", "Redis", "audit_logs", "민감 데이터"],
+        "trust_level": "최고 보호",
+        "required_checks": ["Sensitive 이상 암호화", "audit_logs INSERT ONLY", "Restricted 3중 보호"]
+      }
+    },
+    "llm_zero_trust_rules": {
+      "prompt_injection": "사용자 입력을 시스템 프롬프트와 완전 분리 + sanitize_input()",
+      "output_validation": "LLM 출력은 코드 실행 전 validate_response() 검증 필수",
+      "system_prompt_security": "환경변수 또는 context JSON 로드 (하드코딩 절대 금지)",
+      "data_minimization": "LLM에 전달하는 데이터는 Internal 이하만 허용",
+      "execution_control": "LLM 제안 실행은 반드시 Human 승인 게이트 통과 후"
+    }
+  },
+
+  "risk_based_approval": {
+    "_description": "Risk-Based Approval 결정 매트릭스 및 승인 워크플로우. Cursor는 이 매트릭스에 따라 승인 게이트를 코드에 삽입한다.",
+    "decision_matrix": {
+      "_description": "행동 유형 × Risk Level 교차점 = 필요 승인 수준",
+      "action_types": {
+        "data_read": {
+          "LOW": "불필요",
+          "MEDIUM": "불필요",
+          "HIGH": "로그_기록",
+          "CRITICAL": "HITL_P2_즉시"
+        },
+        "analysis_recommendation": {
+          "LOW": "불필요",
+          "MEDIUM": "로그_기록",
+          "HIGH": "HITL_P1",
+          "CRITICAL": "HITL_P1_Board"
+        },
+        "data_write": {
+          "LOW": "로그_기록",
+          "MEDIUM": "HITL_P1",
+          "HIGH": "HITL_P1_2중승인",
+          "CRITICAL": "즉시_중단"
+        },
+        "ai_model_execution": {
+          "LOW": "로그_기록",
+          "MEDIUM": "HITL_P1",
+          "HIGH": "HITL_P1_Risk체크",
+          "CRITICAL": "즉시_중단_Board"
+        },
+        "context_modification": {
+          "LOW": "HITL_P1",
+          "MEDIUM": "HITL_P1_Board",
+          "HIGH": "즉시_중단_Board",
+          "CRITICAL": "배포_금지"
+        },
+        "external_api_call": {
+          "LOW": "Allowlist_검사",
+          "MEDIUM": "HITL_P1",
+          "HIGH": "HITL_P1_감사",
+          "CRITICAL": "즉시_중단"
+        },
+        "deployment": {
+          "LOW": "HITL_P3",
+          "MEDIUM": "HITL_P3_Board",
+          "HIGH": "HITL_P3_Board_2중",
+          "CRITICAL": "배포_금지"
+        }
+      },
+      "approval_codes": {
+        "불필요": "승인 없이 실행 가능. audit_logs 기록 필수.",
+        "로그_기록": "audit_logs INSERT 후 실행 허용.",
+        "HITL_P1": "Pre-approval 필수. SLA 24h. approval_requests 생성.",
+        "HITL_P2_즉시": "On-risk 즉시 에스컬레이션. SLA 1h. override_logs 생성.",
+        "HITL_P3": "Post-review 필수. SLA 48h. review_requests 생성.",
+        "HITL_P1_Board": "P1 + Governance Board 추가 승인 필수.",
+        "HITL_P1_2중승인": "P1 + 2인 이상 승인자 필수.",
+        "HITL_P1_Risk체크": "P1 + Risk Level 재평가 로직 포함.",
+        "HITL_P1_감사": "P1 + 외부 호출 감사 로그 상세 기록.",
+        "HITL_P3_Board": "P3 + Governance Board 확인.",
+        "HITL_P3_Board_2중": "P3 + Board + 2인 승인자 필수.",
+        "즉시_중단": "Agent 자동 중단 → Override 절차 적용.",
+        "즉시_중단_Board": "자동 중단 + Governance Board 즉시 알림.",
+        "배포_금지": "어떠한 조건에서도 배포 불가."
+      }
+    },
+    "approval_lifecycle": {
+      "P1_pre_approval": {
+        "sla_hours": 24,
+        "db_table": "approval_requests",
+        "states": ["PENDING", "APPROVED", "REJECTED", "ESCALATED"],
+        "timeout_action": "상위 승인자 자동 에스컬레이션",
+        "escalation_chain": ["Business Owner", "AI Architect", "PM", "Governance Board"]
+      },
+      "P2_on_risk": {
+        "sla_hours": 1,
+        "db_table": "override_logs",
+        "states": ["TRIGGERED", "RESOLVED", "ESCALATED"],
+        "timeout_action": "PM 즉시 호출 + Business Owner 알림",
+        "board_report_within_hours": 24
+      },
+      "P3_post_review": {
+        "sla_hours": 48,
+        "db_table": "review_requests",
+        "states": ["PENDING", "CONFIRMED", "REVISED", "REJECTED"],
+        "timeout_action": "리마인더 발송 → +24h 후 AI Architect → PM 에스컬레이션"
+      }
+    },
+    "approver_matrix": {
+      "L0_L1_general": {
+        "primary": "Business Owner",
+        "escalation_1": "AI Architect",
+        "escalation_2": "PM"
+      },
+      "L1_high_risk": {
+        "primary": "Business Owner",
+        "escalation_1": "AI Governance Board",
+        "escalation_2": "Executive Sponsor"
+      },
+      "L2_conditional": {
+        "primary": "AI Governance Board",
+        "escalation_1": "Executive Sponsor",
+        "escalation_2": "즉시_중단 (이상 불가)"
+      },
+      "L3_autonomous": {
+        "primary": "Executive + Governance Board 공동",
+        "escalation_1": "즉시_중단 (이상 불가)",
+        "escalation_2": null
+      },
+      "context_modification": {
+        "primary": "Governance Board",
+        "escalation_1": "Executive Sponsor",
+        "escalation_2": "즉시_중단 (이상 불가)"
+      },
+      "critical_risk": {
+        "primary": "자동_즉시_중단",
+        "escalation_1": "Business Owner 즉시 알림",
+        "escalation_2": "Governance Board 24h 내 보고"
+      }
+    },
+    "exception_approval": {
+      "allowed_conditions": [
+        "보안 침해 대응 긴급 조치",
+        "규제기관 즉각 대응 요구",
+        "시스템 장애 긴급 복구",
+        "Governance Board 승인 특수 상황"
+      ],
+      "sla_hours": 4,
+      "max_validity_days": 90,
+      "required_fields": ["exception_reason", "impact_scope", "mitigation_measures", "validity_period"],
+      "forbidden": [
+        "CRITICAL Risk 상황에서의 예외 실행",
+        "Audit Log 없는 예외 실행",
+        "유효 기간 없는 무기한 예외",
+        "동일 예외 3회 초과 (구조 개선 의무)"
+      ],
+      "repeat_threshold": 3,
+      "repeat_action": "구조적 개선 필수 — Scope 변경 또는 프로세스 재정의"
+    },
+    "audit_trail_required_fields": [
+      "agent_id",
+      "action_type",
+      "risk_level",
+      "payload_hash",
+      "requested_by",
+      "requested_at",
+      "approver",
+      "decision",
+      "decision_basis",
+      "decided_at",
+      "accountable_human_id"
+    ],
+    "audit_retention_years": 5,
+    "audit_response_sla_hours": 72
+  },
+
+  "cursor_governance_checklist": {
+    "_description": "Cursor가 코드 생성 후 반드시 확인하는 Governance 체크리스트",
+    "items": [
+      "□ AI 리스크 관련 함수에 해당 risk type의 mitigation_rules가 적용되었는가?",
+      "□ LLM 호출 후 validate_response() 적용되었는가?",
+      "□ 외부 입력에 sanitize_input() 적용되었는가?",
+      "□ Zero-Trust ZT-1: 모든 API에 JWT 검증 포함되었는가?",
+      "□ Zero-Trust ZT-2: Agent의 Scope 초과 접근 차단 로직이 있는가?",
+      "□ Zero-Trust ZT-3: DB 쿼리에 organization_id 테넌트 필터가 있는가?",
+      "□ Zero-Trust ZT-5: Override 엔드포인트가 포함되었는가?",
+      "□ decision_matrix에 따른 적절한 승인 게이트가 포함되었는가?",
+      "□ 승인 결과가 audit_logs에 accountable_human_id와 함께 기록되는가?",
+      "□ audit_logs에 DELETE/UPDATE 쿼리가 없는가?",
+      "□ AI 결과에 decision_basis 및 explanation 필드가 있는가?",
+      "□ trajectory_logs에 kpi_metrics가 함께 기록되는가?"
+    ]
+  }
+}

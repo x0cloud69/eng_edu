@@ -1,0 +1,195 @@
+# Phase 3. Memory Architecture — 코드 생성 규칙
+# ─────────────────────────────────────────────────────────
+# 참조:
+#   @.cursor/context/memory_context.json  ← 4계층 구조 + DB 스키마 + Retrieval Rule
+#   @.cursor/context/governance.json      ← Authority Level + 데이터 보호 정책
+#   @.cursor/context/saas_foundation.json ← Redis + pgvector 설정
+#
+# 우선순위: 01_principles.mdc > 02_security.mdc > 이 파일
+# ─────────────────────────────────────────────────────────
+
+## 이 파일의 역할
+
+memory_context.json에서 정의된 4계층 Memory 구조를 Cursor가
+코드 생성 시 반드시 따르도록 강제한다.
+
+---
+
+## 규칙 1 — MemoryStore 인터페이스 경유 절대 원칙
+
+```python
+# ✅ 반드시 MemoryStore 경유
+from backend.src.core.memory_store import MemoryStore
+memory = MemoryStore()
+
+# Session (L2)
+await memory.session_set(f"Back-A:{ctx.trace_id}:state", value, ttl=86400)
+value = await memory.session_get(f"Back-A:{ctx.trace_id}:state")
+
+# Episodic (L3)
+await memory.episodic_log(ctx.trace_id, {...})
+
+# Semantic (L4)
+results = await memory.semantic_search("패턴 쿼리", top_k=5)
+
+# ❌ 절대 금지
+import redis; redis.Redis()              # 직접 Redis 접근
+session.execute(select(TrajectoryLog))  # 직접 DB 쿼리
+session.execute(select(AgentKnowledge)) # 직접 DB 쿼리
+```
+
+---
+
+## 규칙 2 — Session Memory (L2) key 형식 강제
+
+```python
+# ✅ key 형식: {agent_code}:{trace_id}:{key}
+KEY_APPROVAL = f"Back-A:{ctx.trace_id}:approval_state"
+KEY_CONTEXT  = f"Orch:{ctx.trace_id}:agent_context"
+
+# ❌ 금지
+await memory.session_set("approval", value)       # agent_code 없음
+await memory.session_set(ctx.trace_id, value)     # key 구분 없음
+await memory.session_set("Back-A:state", value)   # trace_id 없음
+```
+
+**TTL 규칙:**
+```python
+# ✅ 최대 TTL: 86400초(24h). 초과 금지.
+await memory.session_set(key, value, ttl=86400)  # 최대값
+
+# ❌ 금지
+await memory.session_set(key, value, ttl=604800) # 7일 TTL 금지
+await memory.session_set(key, value)             # ttl 생략 금지
+```
+
+---
+
+## 규칙 3 — Episodic Memory (L3) 필수 필드
+
+```python
+# ✅ 모든 필드 포함 필수
+await memory.episodic_log(ctx.trace_id, {
+    "agent_code":     "Back-A",
+    "action":         "db.migration.generated",     # {resource}.{action} 형식
+    "input_summary":  mask_pii(str(ctx.payload)),   # PII 마스킹 필수
+    "output_summary": "migration v2 생성 완료",
+    "risk_level":     "HIGH",
+    "kpi_metrics": {                                # 빈 {} 절대 금지
+        "execution_time_ms": 1200,
+        "success": True,
+        "tokens_used": 843
+    },
+    "failure_tagged": False,
+    "hitl_pattern":   "P1"
+})
+
+# ❌ 금지
+await memory.episodic_log(ctx.trace_id, {
+    "agent_code": "Back-A",
+    "action": "db.migration.generated",
+    "kpi_metrics": {}   # 빈 객체 금지
+    # failure_tagged 누락 금지
+})
+```
+
+**trajectory_logs 직접 조작 금지:**
+```python
+# ❌ 절대 금지
+await db.execute(update(TrajectoryLog).where(...))   # UPDATE 금지
+await db.execute(delete(TrajectoryLog).where(...))   # DELETE 금지
+await db.execute(insert(TrajectoryLog).values(...))  # 직접 INSERT 금지 → episodic_log() 사용
+```
+
+---
+
+## 규칙 4 — Semantic Memory (L4) 유사도 임계값 0.80
+
+```python
+# ✅ 검색 — 0.80 미달 자동 필터
+results = await memory.semantic_search("DB migration 패턴", top_k=5)
+# MemoryStore 내부에서 similarity < 0.80 자동 제거
+if not results:
+    pass  # 결과 없을 때 처리 필수
+
+# ✅ 등록 — P1 승인 ID 필수
+await memory.semantic_register(
+    content=knowledge_text,
+    metadata={
+        "category":    "pattern",
+        "agent_code":  "Back-A",
+        "approval_id": str(approval_id)  # 필수 — P1 승인 없이 등록 금지
+    }
+)
+
+# ❌ 금지
+results = await memory.semantic_search("...", top_k=10)
+if results and results[0]["score"] > 0.5:   # 0.80 미만 임계값 금지
+    use_pattern(results[0])
+
+await memory.semantic_register(content=text, metadata={
+    "category": "pattern"
+    # approval_id 없음 — 절대 금지
+})
+```
+
+---
+
+## 규칙 5 — PII 마스킹 필수
+
+```python
+# ✅ Memory 저장 전 PII 마스킹
+from backend.src.core.security import mask_pii
+
+await memory.episodic_log(ctx.trace_id, {
+    "input_summary":  mask_pii(str(ctx.payload)),   # 필수
+    "output_summary": mask_pii(str(result.data)),   # 필수
+    ...
+})
+
+# ❌ 금지
+await memory.episodic_log(ctx.trace_id, {
+    "input_summary": str(ctx.payload),  # PII 마스킹 없이 저장 금지
+    ...
+})
+```
+
+---
+
+## 규칙 6 — 계층별 접근 권한 준수
+
+memory_context.json access_permission_matrix 기준:
+
+| 계층 | 쓰기 허용 Agent | 읽기 허용 Agent |
+|------|---------------|---------------|
+| Session (L2) | Orch, Back-A, Test-A | 전체 |
+| Episodic (L3) — 쓰기 | Orch, Back-A, Front-A, Test-A, UIUX-A | Monitor-A, Evol-A |
+| Semantic (L4) — 쓰기 | Back-A, Evol-A (P1 승인 필수) | 전체 |
+
+```python
+# ✅ 권한 체크를 MemoryStore 생성자에 agent_code 전달로 자동 처리
+memory = MemoryStore(agent_code="Monitor-A")
+# Monitor-A는 episodic_log() 쓰기 호출 시 MemoryAccessException 자동 발생
+
+# ❌ 금지 패턴 — Cursor가 이런 코드 생성 금지
+class MonitorAgent(BaseAgent):
+    async def execute(self, ctx, db):
+        await memory.episodic_log(...)  # Monitor-A는 쓰기 금지
+```
+
+---
+
+## Cursor 체크리스트 (Memory 코드 생성 전)
+
+```
+□ Redis 직접 접근 없이 memory_store.session_*() 경유인가?
+□ Session key가 {agent_code}:{trace_id}:{key} 형식인가?
+□ session_set() ttl이 86400 이하인가?
+□ episodic_log() 호출에 kpi_metrics 필드가 있는가? (빈 {} 금지)
+□ episodic_log() 호출에 failure_tagged 필드가 있는가?
+□ input_summary, output_summary에 mask_pii() 적용되었는가?
+□ semantic_register() 호출에 approval_id가 있는가?
+□ trajectory_logs, agent_knowledge에 UPDATE/DELETE 없는가?
+□ Semantic 검색 결과에 0.80 미만 임계값 사용 코드가 없는가?
+□ agent_code에 맞는 Memory 계층 접근 권한을 준수하는가?
+```

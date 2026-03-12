@@ -1,0 +1,236 @@
+# SaaS Foundation — 기술 스택 및 코드 생성 규칙
+# ─────────────────────────────────────────────────────────
+# 참조: .cursor/context/saas_foundation.json (Phase 0 기반)
+#       .cursor/context/saas_implementation.json (구현 순서 기준)
+# 우선순위: 01_principles.mdc > 02_security.mdc > 이 파일
+# ─────────────────────────────────────────────────────────
+
+## 이 파일의 역할
+
+Implementation Guide (Phase 0 산출물)에서 결정된 기술 규칙을 Cursor가
+코드 생성 시 반드시 따르도록 강제하는 규칙 파일이다.
+설계 이유는 saas_foundation.json 참조. 이 파일은 "무엇을 해야 하는가"만 정의한다.
+
+---
+
+## 규칙 1 — Backend 파일 생성 의존성 순서 (절대 준수)
+
+아래 순서를 무시하면 ImportError / 순환 참조가 발생한다.
+Cursor는 파일 생성 요청 시 반드시 이 순서를 따른다.
+
+```
+Step  1: backend/src/db/base.py              ← DeclarativeBase (가장 먼저)
+Step  2: backend/src/core/config.py          ← Settings, lru_cache
+Step  3: backend/src/core/logging.py         ← structlog JSON, 민감정보 마스킹
+Step  4: backend/src/db/session.py           ← async engine, get_db, current_tenant_id
+Step  5: backend/src/db/migrations/          ← Alembic init (최초 1회)
+Step  6: backend/src/models/base.py          ← BaseModel · SoftDeleteMixin · TenantModel
+Step  7: backend/src/schemas/base.py         ← ApiResponse · PaginatedResponse · ErrorResponse
+Step  8: backend/src/core/exceptions.py      ← AppException + 에러 코드 체계
+Step  9: backend/src/core/security.py        ← JWT · bcrypt cost=12
+Step 10: backend/src/core/cache.py           ← Redis 싱글톤
+Step 11: backend/src/utils/datetime.py       ← now_utc, to_kst
+Step 12: backend/src/utils/pagination.py     ← PaginationParams, paginate()
+Step 13: backend/src/api/deps.py             ← TenantContext · require_role · require_plan
+Step 14: backend/src/core/audit.py           ← create_audit_log
+Step 15: backend/src/api/main.py             ← FastAPI 앱 (반드시 마지막)
+```
+
+---
+
+## 규칙 2 — Frontend 파일 생성 의존성 순서 (절대 준수)
+
+```
+Step  1: tsconfig.json                       ← path alias @/ (반드시 가장 먼저)
+Step  2: .eslintrc.json + .prettierrc
+Step  3: next.config.ts
+Step  4: src/types/api.ts                    ← ApiResponse · PaginatedResponse · ApiError
+Step  5: src/types/auth.ts                   ← User · Organization · MemberContext
+Step  6: src/constants/api.ts                ← ENDPOINTS
+Step  7: src/lib/axios.ts                    ← 인터셉터 · Refresh 자동 재발급
+Step  8: src/stores/authStore.ts             ← Zustand (메모리 저장)
+Step  9: src/lib/queryClient.ts              ← React Query
+Step 10: src/hooks/useAuth.ts
+Step 11: src/hooks/usePagination.ts
+Step 12: src/components/common/              ← LoadingSpinner · ErrorBoundary
+Step 13: src/components/ui/                  ← Button · Input · Modal · Toast · Table
+Step 14: src/app/providers.tsx
+Step 15: src/app/layout.tsx                  ← Providers 감싸기 (반드시 마지막)
+```
+
+---
+
+## 규칙 3 — DB 모델 필수 규칙
+
+```python
+# ✅ 올바른 방법 — BaseModel 상속, UUID PK
+from backend.src.models.base import BaseModel, TenantModel, SoftDeleteMixin
+
+class MyModel(TenantModel):          # 테넌트 모델
+    __tablename__ = "my_table"
+    # id: UUID v4 (BaseModel이 자동 포함)
+    # organization_id: UUID (TenantModel이 자동 포함)
+    # created_at, updated_at: (BaseModel이 자동 포함)
+    # deleted_at, deleted_by: (SoftDeleteMixin이 자동 포함)
+
+# ❌ 금지
+class BadModel(Base):
+    id = Column(Integer, primary_key=True)   # Integer PK 금지 — UUID 사용
+    # tenant_id 수동 추가 금지 — TenantModel이 자동 포함
+```
+
+**DB 절대 금지 사항:**
+- `Integer` PK 사용 금지 → 반드시 `UUID v4`
+- `Base` 직접 상속 금지 → `BaseModel` 또는 `TenantModel` 상속
+- `tenant_id` 컬럼 수동 추가 금지 → `TenantModel`이 자동 포함
+- 물리 DELETE 금지 → `SoftDeleteMixin`의 `deleted_at` 사용
+- Alembic `env.py`에 모델 import 누락 금지 → 새 모델 추가 시 반드시 등록
+
+---
+
+## 규칙 4 — 인증 / 보안 규칙
+
+```python
+# ✅ JWT — Access Token 15분, Refresh Token 30일
+access_token  = create_access_token(user_id, org_id, role, plan)  # 15분
+refresh_token, jti = create_refresh_token(user_id)                 # 30일
+
+# ✅ 비밀번호 — bcrypt cost=12 고정
+pwd_context = CryptContext(schemes=["bcrypt"], bcrypt__rounds=12)
+
+# ✅ API Token — SHA-256 해시 후 DB 저장
+token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+```
+
+```typescript
+// ✅ Access Token — Zustand 메모리에만 저장
+useAuthStore.getState().setAccessToken(token)
+
+// ❌ 절대 금지
+localStorage.setItem('access_token', token)   // XSS 취약점
+sessionStorage.setItem('access_token', token) // 금지
+```
+
+---
+
+## 규칙 5 — Redis 캐시 규칙
+
+```python
+# ✅ 싱글톤 패턴 — core/cache.py 통해서만 사용
+from backend.src.core.cache import cache_get, cache_set, cache_delete, get_redis_client
+
+# ✅ 캐시 키 네이밍: {namespace}:{entity}:{id}
+"login_attempts:{email}"
+"refresh_token:{user_id}:{jti}"
+"feature_flag:{org_id}:{flag_key}"
+
+# ❌ 금지
+import redis; redis.Redis()  # 직접 클라이언트 생성 금지
+```
+
+---
+
+## 규칙 6 — API 응답 포맷 (반드시 통일)
+
+```python
+# ✅ 성공 — ApiResponse 사용
+from backend.src.schemas.base import ApiResponse, PaginatedResponse
+return ApiResponse(success=True, data=result)
+
+# ✅ 에러 — AppException 사용
+from backend.src.core.exceptions import NotFoundException
+raise NotFoundException("사용자")    # → {"success": false, "error": {"code": "ERR_DATA_001", ...}}
+
+# ❌ 금지
+return JSONResponse({"data": result})  # 직접 JSONResponse 금지
+return {"success": True, "data": result}  # dict 직접 반환 금지
+```
+
+---
+
+## 규칙 7 — LLM 호출 규칙
+
+```python
+# ✅ LLMProvider 인터페이스 경유 필수
+from backend.src.core.llm_provider import LLMService
+result = await llm_service.complete(messages=messages, model="gpt-4o")
+
+# ❌ 절대 금지
+import anthropic
+anthropic.Anthropic().messages.create(...)    # 직접 SDK 호출 금지
+import openai
+openai.ChatCompletion.create(...)             # 직접 SDK 호출 금지
+```
+
+---
+
+## 규칙 8 — Agent 코드 규칙
+
+```python
+# ✅ BaseAgent 상속 필수
+from backend.src.core.base_agent import BaseAgent, AgentContext, AgentResult
+
+class MyAgent(BaseAgent):
+    async def execute(self, ctx: AgentContext, db) -> AgentResult:
+        # 1. Global Context 로드 (반드시)
+        global_ctx = self.global_ctx
+        # 2. Risk Level 체크
+        # 3. Human 승인 게이트 (L1 기본값)
+        # 4. 실행
+        # 5. audit_logs INSERT 필수
+        ...
+
+# ❌ 금지
+class BadAgent:
+    async def run(self):  # BaseAgent 상속 없음 — 금지
+        ...
+```
+
+---
+
+## 규칙 9 — Audit Log 규칙
+
+모든 상태 변경(INSERT/UPDATE/SoftDelete)에 audit_log 기록 필수.
+
+```python
+# ✅ create_audit_log 헬퍼 사용
+await create_audit_log(
+    session=db,
+    org_id=ctx.org_id,
+    user_id=ctx.user_id,
+    action="agent.created",        # {resource}.{action} 형식
+    resource_type="Agent",
+    resource_id=agent.id,
+    after_data=agent.dict(),
+    severity="info",
+)
+# ❌ audit_log 없는 상태 변경 코드 작성 금지
+```
+
+---
+
+## 규칙 10 — 환경변수 / 시크릿 규칙
+
+```python
+# ✅ 환경변수 사용
+from backend.src.core.config import settings
+api_key = settings.openai_api_key
+
+# ❌ 절대 금지
+API_KEY = "sk-abc123..."   # 하드코딩 절대 금지
+```
+
+---
+
+## Cursor 생성 금지 목록
+
+| 금지 패턴 | 이유 | 올바른 대안 |
+|-----------|------|------------|
+| `Column(Integer, primary_key=True)` | UUID 정책 위반 | `UUID v4` |
+| `localStorage.setItem('access_token')` | XSS 취약점 | Zustand 메모리 |
+| `return JSONResponse({"data": ...})` | 응답 포맷 불일치 | `ApiResponse` |
+| `anthropic.Anthropic().messages.create()` | LLM 추상화 위반 | `LLMService` |
+| `Base` 직접 상속 | 표준 모델 위반 | `TenantModel` 상속 |
+| `audit_log` 없는 상태 변경 | 감사 원칙 위반 | `create_audit_log` 추가 |
+| 하드코딩 Secret / API Key | 보안 정책 위반 | `settings.xxx` |
+| `engine.connect()` 직접 호출 | DB 세션 정책 위반 | `Depends(get_db)` |

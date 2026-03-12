@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "document": "1.6 Governance Charter",
+    "doc_number": "GC-STD-2026-001",
+    "phase": "Phase 1 - Vision & Role 정의",
+    "version": "v1.0",
+    "classification": "CONFIDENTIAL",
+    "created_by": "KY Song",
+    "description": "Cursor AI가 코드 생성 시 참조하는 거버넌스 헌장. 모든 표준의 최상위 기준.",
+    "change_log": [
+      { "version": "v1.0", "date": "2026", "summary": "Phase 1 초기 제정" }
+    ]
+  },
+
+  "current_project": {
+    "authority_level": "L1",
+    "risk_level": "HIGH",
+    "human_in_the_loop": true,
+    "audit_log_required": true,
+    "upgrade_requires": "Governance Board 공식 승인"
+  },
+
+  "five_principles": [
+    { "no": 1, "name": "전략과 실행의 분리", "code_rule": "Agent 함수 내 전략 판단 로직 직접 작성 금지" },
+    { "no": 2, "name": "최소 권한 원칙",     "code_rule": "allowed_scope 외 실행 시 즉시 Escalation" },
+    { "no": 3, "name": "감사 가능성 우선",   "code_rule": "모든 실행 → audit_logs INSERT 필수" },
+    { "no": 4, "name": "리스크 기반 통제",   "code_rule": "Risk Level 체크 모든 Agent 필수 포함" },
+    { "no": 5, "name": "지속적 개선 내재화", "code_rule": "trajectory_logs 기록 후 Evolution Loop 연계" }
+  ],
+
+  "authority_levels": {
+    "L0": { "name": "분석 지원",    "auto_execution": false, "approver": "불필요" },
+    "L1": { "name": "추천 수준",    "auto_execution": false, "approver": "Business Owner",                     "current": true },
+    "L2": { "name": "조건부 자동",  "auto_execution": true,  "approver": "Governance Board" },
+    "L3": { "name": "고도 자율",    "auto_execution": true,  "approver": "Executive + Governance Board 공동" }
+  },
+
+  "risk_levels": {
+    "Low":      { "control": "기본 통제",               "response": "표준 모니터링" },
+    "Medium":   { "control": "표준 통제 + 주기적 검토", "response": "이상 탐지 시 알림" },
+    "High":     { "control": "강화 통제 + Human 승인",  "response": "즉시 보고 + 대응" },
+    "Critical": { "control": "최고 수준 + 즉시 에스컬", "response": "자동 중단 + 긴급 대응" }
+  },
+
+  "audit_log_requirements": {
+    "mandatory_fields": ["agent_id", "agent_version", "executed_at", "input_data", "decision_basis", "result", "human_approval", "escalation_occurred"],
+    "forbidden_operations": ["DELETE", "UPDATE"],
+    "retention_years": 5,
+    "response_sla_hours": 72
+  },
+
+  "data_classification": {
+    "Public":     { "encryption": false, "masking": false, "external_allowed": true },
+    "Internal":   { "encryption": false, "masking": false, "external_allowed": false },
+    "Sensitive":  { "encryption": true,  "masking": true,  "external_allowed": false },
+    "Restricted": { "encryption": true,  "masking": true,  "external_allowed": false, "anonymize": true }
+  },
+
+  "forbidden_actions": [
+    "승인 없는 자동 실행",
+    "Audit Log 없는 상태 변경",
+    "Context 무단 수정",
+    "Scope 초과 실행",
+    "API Key 하드코딩",
+    "Restricted 데이터 암호화 없이 저장",
+    "로그 DELETE/UPDATE",
+    "회귀 테스트 없이 재배포"
+  ],
+
+  "violation_response": {
+    "audit_log_missing":      { "immediate": "배포 차단",       "followup": "로그 자동 검증 체계 구축" },
+    "scope_exceeded":         { "immediate": "즉시 실행 중단",  "followup": "Scope 검증 로직 강화" },
+    "unauthorized_execution": { "immediate": "롤백 + 격리",     "followup": "승인 게이트 강화" },
+    "context_tampered":       { "immediate": "즉시 복원",       "followup": "변경 권한 재설정" },
+    "data_breach":            { "immediate": "즉시 격리",       "followup": "보안 체계 전면 점검" }
+  },
+
+  "context_change_procedure": [
+    { "step": 1, "activity": "변화 감지",     "owner": "Monitoring Agent" },
+    { "step": 2, "activity": "위험성 평가",   "owner": "AI Architect" },
+    { "step": 3, "activity": "수정 제안",     "owner": "Evolution Agent (보조)" },
+    { "step": 4, "activity": "Governance 승인","owner": "Governance Board" },
+    { "step": 5, "activity": "재생성 및 테스트","owner": "Test Agent" },
+    { "step": 6, "activity": "재배포",        "owner": "DevOps Lead" }
+  ],
+
+  "exception_policy": {
+    "requires": "Governance Board 사전 승인",
+    "max_validity_days": 90,
+    "required_docs": ["예외 내용 및 사유", "영향 범위 분석", "완화 조치", "유효 기간"],
+    "repeat_exception_threshold": 3,
+    "repeat_action": "구조적 개선 대상으로 전환"
+  },
+
+  "review_cycle": {
+    "charter_review": "연 1회 정기 검토",
+    "raci_review": "연 1회",
+    "security_review": "연 1회",
+    "scope_review": "연 1회"
+  }
+}

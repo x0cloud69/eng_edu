@@ -1,0 +1,320 @@
+{
+  "_meta": {
+    "document": "AI 거버넌스 및 자율성 선정 가이드 (0_1 기반)",
+    "version": "v1.1",
+    "created_by": "Claude",
+    "change_log": [
+      {
+        "version": "v1.0",
+        "date": "2026",
+        "summary": "Phase 1 초기 생성"
+      },
+      {
+        "version": "v1.1",
+        "date": "2026",
+        "summary": "1.4 Authority Model — Agent별 자율성 레벨 결정서 추가"
+      },
+      {
+        "version": "v1.2",
+        "date": "2026-03-09",
+        "summary": "[Fix] current_project_governance.drift_monitoring: false → true (1.4 Authority Model과 일치. Monitor-A가 Drift 모니터링 전담)"
+      }
+    ]
+  },
+  "authority_levels": {
+    "L0": {
+      "name": "분석 지원",
+      "description": "Human 전면 결정, AI는 분석·탐지·알림만 수행. 알림/탐지 자동 실행 허용, 대응 결정은 Human 필요",
+      "auto_execution": false,
+      "human_approval": "탐지·알림은 자동, 대응 결정은 Human 필요",
+      "typical_use": "데이터 분석, KPI 모니터링, Drift 탐지, 리포트 생성",
+      "note": "Monitor-A가 해당. 탐지/알림은 자동이나 Incident 대응 결정은 Human Gate 필수"
+    },
+    "L1": {
+      "name": "추천 수준",
+      "description": "AI 추천, 최종 결정은 Human 승인 필수",
+      "auto_execution": false,
+      "human_approval": "필수",
+      "typical_use": "의사결정 보조, 추천 시스템",
+      "current_project": true
+    },
+    "L2": {
+      "name": "조건부 자동 실행",
+      "description": "사전 정의된 조건 내 자동 수행",
+      "auto_execution": true,
+      "human_approval": "조건부",
+      "typical_use": "제한된 자동화, 반복 업무"
+    },
+    "L3": {
+      "name": "고도 자율",
+      "description": "사후 모니터링 중심, 고도 자율 실행",
+      "auto_execution": true,
+      "human_approval": "사후 모니터링",
+      "typical_use": "실시간 자동 의사결정",
+      "special_requirement": "Executive + Governance Board 공동 승인 필수"
+    }
+  },
+  "current_project_governance": {
+    "authority_level": "L1",
+    "risk_level": "HIGH",
+    "project_type": "DesignRecommendation",
+    "human_in_the_loop": true,
+    "audit_log_required": true,
+    "drift_monitoring": true
+  },
+  "approval_chain": {
+    "L0_L1": {
+      "approver": "Business Owner",
+      "method": "단독 승인"
+    },
+    "L2": {
+      "approver": "AI Governance Board",
+      "method": "단독 승인"
+    },
+    "L3": {
+      "approver": [
+        "Executive Sponsor",
+        "AI Governance Board"
+      ],
+      "method": "공동 승인 필수"
+    }
+  },
+  "risk_levels": {
+    "Low": {
+      "description": "내부 분석 지원 수준",
+      "control": "기본 통제"
+    },
+    "Medium": {
+      "description": "사용자 의사결정 보조",
+      "control": "표준 통제"
+    },
+    "High": {
+      "description": "사용자 영향도 높음 (재무, 법적 영향 가능)",
+      "control": "강화된 통제 + Human 승인"
+    },
+    "Critical": {
+      "description": "생명, 안전, 법적 책임 직접 영향",
+      "control": "최고 수준 통제 + 즉시 에스컬레이션"
+    }
+  },
+  "selection_procedure": [
+    "프로젝트 Scope 정의",
+    "자동 실행 포함 여부 판단",
+    "Risk 등급 평가 (Low/Medium/High/Critical)",
+    "Governance Board 승인",
+    "Constraint Extract 문서화"
+  ],
+  "constraints": {
+    "max_auto_actions": 3,
+    "human_checkpoint": "on_risk",
+    "data_sensitivity": "internal",
+    "external_api_allowed": true,
+    "audit_log_required": true
+  },
+  "agent_authority_model": {
+    "_comment": "1.4 Authority Model — Agent별 자율성 레벨 결정서. Governance Board 승인 기준.",
+    "_approved_by": "Governance Board",
+    "_decision_date": "2026",
+    "_review_cycle": "Phase 변경 시 또는 반기 1회",
+    "agents": [
+      {
+        "code": "Orch",
+        "name": "Orchestrator Agent",
+        "authority_level": "L1",
+        "risk_level": "HIGH",
+        "rationale": "전체 Workflow 조정 및 Escalation 판단 수행. 모든 Decision Gate에서 Human 승인 필수. 자동 실행 권한 없음.",
+        "auto_execution": false,
+        "human_gate": "모든 Decision Gate",
+        "allowed_actions": [
+          "Workflow 흐름 조정",
+          "Escalation 판단 및 이관",
+          "Agent 실행 중단 (Risk CRITICAL 시)",
+          "Context 로드 및 조회"
+        ],
+        "forbidden_actions": [
+          "전략 해석 또는 변경",
+          "Context 직접 수정",
+          "자동 권한 상승",
+          "Human 승인 없는 외부 실행"
+        ],
+        "upgrade_condition": "L2 승인 시 — 반복 패턴 검증된 조건부 자동 Workflow에 한해 Governance Board 승인"
+      },
+      {
+        "code": "UIUX-A",
+        "name": "UIUX Agent",
+        "authority_level": "L1",
+        "risk_level": "MEDIUM",
+        "rationale": "Persona 분석 보조 및 시나리오 초안 생성만 수행. 최종 확정은 Human 전담. 사용자 직접 영향 없음.",
+        "auto_execution": false,
+        "human_gate": "최종 산출물 확정 시",
+        "allowed_actions": [
+          "Persona 분석 보조",
+          "Conversation Flow 초안 생성",
+          "Usage Scenario 초안 생성"
+        ],
+        "forbidden_actions": [
+          "최종 Persona 직접 확정",
+          "Context 직접 수정",
+          "사용자 데이터 직접 접근"
+        ],
+        "upgrade_condition": "해당 없음 — UX 설계 최종 결정은 항상 Human 전담"
+      },
+      {
+        "code": "Front-A",
+        "name": "Frontend Agent",
+        "authority_level": "L1",
+        "risk_level": "MEDIUM",
+        "rationale": "React 컴포넌트 코드 생성 및 UI 자동화 수행. 배포 코드 최종 확정은 Human 검수 필수. 직접 배포 권한 없음.",
+        "auto_execution": false,
+        "human_gate": "코드 리뷰 및 배포 승인",
+        "allowed_actions": [
+          "React 컴포넌트 코드 생성",
+          "타입 정의 생성",
+          "useAgent 훅 경유 API 호출 코드 생성",
+          "ApprovalGate 컴포넌트 생성"
+        ],
+        "forbidden_actions": [
+          "any 타입 사용",
+          "직접 API 호출 (useAgent 훅 경유 필수)",
+          "배포 파이프라인 직접 실행"
+        ],
+        "upgrade_condition": "해당 없음 — 코드 최종 확정은 항상 Human 검수"
+      },
+      {
+        "code": "Back-A",
+        "name": "Backend Agent",
+        "authority_level": "L1",
+        "risk_level": "HIGH",
+        "rationale": "Python Agent 코드 및 API 생성. DB 변경 포함 HIGH 리스크. 모든 실행에 Audit Log 필수. 배포 전 Human 검수 필수.",
+        "auto_execution": false,
+        "human_gate": "DB 변경 / 외부 API 호출 / 배포 승인",
+        "allowed_actions": [
+          "BaseAgent 상속 코드 생성",
+          "FastAPI 엔드포인트 생성",
+          "DB 쿼리 작성 (트랜잭션 포함)",
+          "Audit Log INSERT 코드 생성"
+        ],
+        "forbidden_actions": [
+          "Audit Log 없는 실행 코드",
+          "트랜잭션 없는 DB 변경",
+          "API Key 하드코딩",
+          "Human 승인 없는 외부 API 호출"
+        ],
+        "upgrade_condition": "L2 승인 시 — 반복 검증된 CRUD 패턴에 한해 Governance Board 승인. Audit Log 조건 유지 필수."
+      },
+      {
+        "code": "Test-A",
+        "name": "Test Agent",
+        "authority_level": "L1",
+        "risk_level": "MEDIUM",
+        "rationale": "테스트 자동 실행 및 KPI 측정 수행. Evaluation Report 최종 확정은 Human. 재배포 요청 권한 없음.",
+        "auto_execution": false,
+        "human_gate": "Evaluation Report 확정 / 재배포 승인",
+        "allowed_actions": [
+          "Test Scenario 자동 실행",
+          "KPI 측정 및 집계",
+          "Drift 탐지 및 Incident 알림",
+          "trajectory_logs 기록"
+        ],
+        "forbidden_actions": [
+          "회귀 테스트 없이 재배포 요청",
+          "Evaluation Report 없는 배포 승인 요청",
+          "실패 케이스 미기록"
+        ],
+        "upgrade_condition": "L0 하향 가능 — 단순 KPI 집계/모니터링 기능에 한해 Human 승인 없이 자동 실행 허용 검토 가능"
+      },
+      {
+        "code": "Monitor-A",
+        "name": "Monitoring Agent",
+        "authority_level": "L0",
+        "risk_level": "LOW",
+        "rationale": "KPI 감시 및 이상 탐지만 수행. 실행 권한 없음. 탐지 결과를 Human 또는 Orchestrator에 통보만 함.",
+        "auto_execution": false,
+        "human_gate": "Incident 대응 결정",
+        "allowed_actions": [
+          "KPI 실시간 모니터링",
+          "Drift 자동 탐지",
+          "Incident 알림 발송",
+          "audit_logs 조회 및 보고서 생성"
+        ],
+        "forbidden_actions": [
+          "시스템 직접 변경",
+          "Agent 강제 중단 (Orchestrator 경유 필수)",
+          "Context 수정"
+        ],
+        "upgrade_condition": "L1 승인 시 — 감사 보고서 자동 생성 기능 추가 시 Business Owner 승인"
+      },
+      {
+        "code": "Evol-A",
+        "name": "Evolution Agent",
+        "authority_level": "L1",
+        "risk_level": "HIGH",
+        "rationale": "Context 수정 제안 생성. HIGH 리스크 — Context 변경은 전체 시스템에 영향. 제안만 가능, 직접 적용 절대 금지.",
+        "auto_execution": false,
+        "human_gate": "Context 수정 제안 검토 / Governance Board 승인",
+        "allowed_actions": [
+          "로그 분석 및 패턴 탐지",
+          "Context 수정 제안서 작성",
+          "Regression Test 결과 분석"
+        ],
+        "forbidden_actions": [
+          "Context 직접 수정 (Governance 승인 없이)",
+          "재배포 직접 트리거",
+          "승인 없는 Constraint 변경"
+        ],
+        "upgrade_condition": "해당 없음 — Context 변경은 항상 Governance Board 승인 필수. 레벨 상향 불가."
+      }
+    ],
+    "authority_level_summary": {
+      "L0": [
+        "Monitor-A"
+      ],
+      "L1": [
+        "Orch",
+        "UIUX-A",
+        "Front-A",
+        "Back-A",
+        "Test-A",
+        "Evol-A"
+      ],
+      "L2": [],
+      "L3": []
+    },
+    "selection_checklist": {
+      "description": "Agent Authority Level 선정 시 반드시 확인",
+      "items": [
+        {
+          "question": "자동 실행이 포함되는가?",
+          "if_yes": "L2 이상 → Governance Board 승인 필수"
+        },
+        {
+          "question": "법적/재무적 영향이 존재하는가?",
+          "if_yes": "Risk Level HIGH 이상으로 상향"
+        },
+        {
+          "question": "Human Override가 항상 가능한가?",
+          "if_no": "설계 재검토 필수. Override 불가 Agent 배포 금지"
+        },
+        {
+          "question": "Audit Log가 반드시 기록되는가?",
+          "if_no": "배포 차단. Audit Log 구현 후 재심사"
+        },
+        {
+          "question": "Drift 모니터링 체계가 존재하는가?",
+          "if_no": "Monitor-A 연동 후 배포 허용"
+        },
+        {
+          "question": "Context를 직접 수정할 수 있는가?",
+          "if_yes": "Governance Board 특별 승인 + Evolution Agent 경유 필수"
+        }
+      ]
+    },
+    "escalation_rules": {
+      "risk_critical": "즉시 실행 중단 → Orchestrator → Business Owner",
+      "risk_high": "Human 승인 게이트 → 미승인 시 중단",
+      "scope_exceeded": "즉시 중단 → Orchestrator 에스컬레이션 → 예외 승인 절차",
+      "audit_missing": "배포 차단 → 로그 구현 후 재심사",
+      "drift_detected": "Monitor-A 알림 → Orchestrator → AI Architect → Evolution Agent 제안"
+    }
+  }
+}

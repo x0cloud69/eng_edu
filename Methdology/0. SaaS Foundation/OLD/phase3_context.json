@@ -1,0 +1,210 @@
+{
+  "_meta": {
+    "document": "Phase 3. Capability 구축 — Cursor 컨텍스트",
+    "version": "v1.0",
+    "created_by": "KY Song",
+    "date": "2026",
+    "description": "Phase 3 코드 생성 시 Cursor가 참조하는 Boilerplate 연계 기준. saas_foundation.json + workflow_context.json 와 함께 사용.",
+    "depends_on": [
+      "saas_foundation.json",
+      "workflow_context.json",
+      "hitl_context.json"
+    ]
+  },
+
+  "boilerplate": {
+    "description": "Phase 0에서 완성된 공통 기반. 모든 Phase 3 코드는 이 파일들을 상속·재사용한다.",
+    "files": [
+      {
+        "path": "backend/src/core/base_agent.py",
+        "purpose": "모든 Agent의 부모 클래스",
+        "rule": "모든 Agent는 BaseAgent 상속 필수. execute() 구현만 하면 됨.",
+        "key_classes": ["BaseAgent", "AgentContext", "AgentResult", "AuthorityLevel", "RiskLevel"],
+        "do": "class MyAgent(BaseAgent): async def execute(self, ctx, db): ...",
+        "dont": "_execute() 사용 금지. BaseAgent 상속 없이 Agent 클래스 생성 금지."
+      },
+      {
+        "path": "backend/src/core/base_model.py",
+        "purpose": "모든 DB 모델의 부모 클래스",
+        "rule": "모든 SQLAlchemy 모델은 TenantBaseModel 상속. tenant_id 자동 포함.",
+        "key_classes": ["TenantBaseModel", "SoftDeleteMixin"],
+        "do": "class MyModel(TenantBaseModel): ...",
+        "dont": "Base 직접 상속 금지. tenant_id 컬럼 수동 추가 금지."
+      },
+      {
+        "path": "backend/src/core/llm_provider.py",
+        "purpose": "LLM 호출 추상화 인터페이스",
+        "rule": "LLM 호출은 반드시 LLMProvider 인터페이스 경유. 직접 SDK 호출 금지.",
+        "key_classes": ["LLMProvider", "ClaudeProvider", "LLMService"],
+        "do": "await llm_service.complete(messages=..., model=...)",
+        "dont": "import anthropic; anthropic.Anthropic().messages.create() 직접 호출 금지."
+      },
+      {
+        "path": "backend/src/core/security.py",
+        "purpose": "JWT 인증, RBAC, 공통 API 응답",
+        "rule": "모든 API 엔드포인트에 JWT 검증 미들웨어 적용. 공통 응답 형식 사용.",
+        "key_functions": ["create_access_token", "verify_token", "require_role", "api_success", "api_error"],
+        "do": "return api_success(data=result)",
+        "dont": "return JSONResponse({'data': result}) 직접 반환 금지."
+      },
+      {
+        "path": "backend/src/core/database.py",
+        "purpose": "SQLAlchemy 2.0 async DB 연결",
+        "rule": "DB 세션은 get_db() 의존성 주입 사용. 직접 엔진 생성 금지.",
+        "key_functions": ["get_db", "async_session_maker"],
+        "do": "async def endpoint(db = Depends(get_db)): ...",
+        "dont": "engine.connect() 직접 호출 금지."
+      },
+      {
+        "path": "backend/src/db/models.py",
+        "purpose": "공통 DB 스키마 12개 테이블",
+        "rule": "신규 모듈 DB 모델 작성 전 기존 테이블 확인. 중복 테이블 생성 금지.",
+        "existing_tables": [
+          "tenants", "users", "roles", "permissions",
+          "menus", "programs", "program_numbers",
+          "common_codes", "i18n_messages",
+          "audit_logs", "llm_call_logs", "prompt_templates"
+        ],
+        "do": "기존 users 테이블 상속·확장 사용",
+        "dont": "user 관련 신규 테이블 중복 생성 금지."
+      },
+      {
+        "path": "backend/src/agents/orchestrator_agent.py",
+        "purpose": "Orch Agent — 모든 요청의 단일 진입점",
+        "rule": "신규 Agent 완성 후 OrchestratorAgent.register()로 등록 필수.",
+        "do": "OrchestratorAgent.register('reuse.*', ReuseAgent())",
+        "dont": "Orch 경유 없이 Agent 직접 호출 금지."
+      },
+      {
+        "path": "backend/src/api/main.py",
+        "purpose": "FastAPI 앱 진입점 — 미들웨어 전체 등록",
+        "rule": "신규 라우터는 app.include_router()로 등록. 미들웨어 직접 수정 금지.",
+        "do": "app.include_router(my_router, prefix='/api/v1/...')",
+        "dont": "main.py 미들웨어 코드 직접 수정 금지."
+      },
+      {
+        "path": "frontend/src/hooks/useAgent.ts",
+        "purpose": "모든 Agent API 호출의 단일 훅",
+        "rule": "Frontend에서 모든 Agent 호출은 useAgent() 훅 경유. 직접 fetch 금지.",
+        "do": "const { run } = useAgent(); await run({ action: '...', ... })",
+        "dont": "fetch('/api/v1/agents/invoke') 직접 호출 금지."
+      },
+      {
+        "path": "frontend/src/types/governance.ts",
+        "purpose": "공통 타입 정의 — AgentRequest / AgentResponse / ApprovalState 등",
+        "rule": "Agent 관련 타입은 반드시 governance.ts에서 import. 중복 타입 선언 금지.",
+        "do": "import type { AgentRequest } from '../types/governance'",
+        "dont": "AgentRequest 타입 재선언 금지."
+      },
+      {
+        "path": "frontend/src/components/ApprovalGate.tsx",
+        "purpose": "Human 승인 UI 컴포넌트 (P1/P2/P3 패턴)",
+        "rule": "비가역적 액션(삭제·결제·발송) 전 반드시 ApprovalGate 사용.",
+        "do": "<ApprovalGate level='L1' traceId={...} onApprove={...} />",
+        "dont": "window.confirm() 또는 커스텀 모달로 승인 처리 금지."
+      }
+    ]
+  },
+
+  "code_generation_rules": {
+    "description": "Cursor가 코드 생성 시 반드시 따르는 규칙",
+    "backend": [
+      "Agent 클래스 생성 시: BaseAgent 상속 + execute() 구현 + name/authority_level/allowed_tools 선언 필수",
+      "DB 모델 생성 시: TenantBaseModel 상속 + SoftDeleteMixin 적용",
+      "API 라우터 생성 시: prefix='/api/v1/...' + Depends(get_db) + api_success/api_error 응답",
+      "LLM 호출 시: LLMService.complete() 사용 — 직접 SDK 호출 금지",
+      "모든 DB 쿼리: tenant_id 필터 자동 포함 (TenantBaseModel 사용 시 자동)",
+      "상태 변경 시: audit_logs INSERT 필수 (AuditLogger.log() 호출)",
+      "물리 삭제 금지: is_active=False 또는 SoftDeleteMixin 사용",
+      "환경변수: os.getenv() 사용 — 코드 내 Secret 하드코딩 절대 금지"
+    ],
+    "frontend": [
+      "Agent 호출 시: useAgent() 훅 사용 — fetch() 직접 호출 금지",
+      "타입 import: governance.ts 또는 reuse.ts에서 — 중복 선언 금지",
+      "비가역적 액션: ApprovalGate 컴포넌트 사용 필수",
+      "상태 관리: Zustand store 사용 — useState 남용 금지",
+      "스타일: Tailwind 유틸리티 클래스만 — 인라인 style 최소화",
+      "any 타입 사용 금지 — unknown 또는 구체적 타입 선언",
+      "환경변수: NEXT_PUBLIC_ 또는 REACT_APP_ prefix 사용"
+    ],
+    "common": [
+      "모든 파일 상단에 출처 주석 포함 (어떤 saas_foundation 기준인지)",
+      "TODO 주석 형식: # Phase 3: 구현 내용",
+      "에러 메시지: 한국어 (사용자 노출) + 영어 코드 (로그)"
+    ]
+  },
+
+  "agent_template": {
+    "description": "신규 Agent 생성 시 Cursor가 사용하는 표준 템플릿",
+    "python": [
+      "from src.core.base_agent import BaseAgent, AgentContext, AgentResult, AuthorityLevel, RiskLevel",
+      "",
+      "class {AgentName}(BaseAgent):",
+      "    name            = '{AgentName}'",
+      "    authority_level = AuthorityLevel.L1",
+      "    allowed_tools   = ['{tool_1}', '{tool_2}']",
+      "",
+      "    async def execute(self, ctx: AgentContext, db=None) -> AgentResult:",
+      "        # 비즈니스 로직 구현",
+      "        # Phase 3: 실제 로직 작성",
+      "        return AgentResult(success=True, data={}, trace_id=ctx.trace_id)"
+    ]
+  },
+
+  "module_template": {
+    "description": "신규 비즈니스 모듈 생성 시 폴더 구조 기준",
+    "structure": [
+      "backend/src/modules/{module_name}/",
+      "  __init__.py",
+      "  models.py       ← TenantBaseModel 상속 DB 모델",
+      "  schemas.py      ← Pydantic 입출력 스키마",
+      "  service.py      ← 비즈니스 로직 (DB 인터페이스)",
+      "  router.py       ← FastAPI 라우터 (prefix='/api/v1/{module}')",
+      "  agent.py        ← BaseAgent 상속 모듈 전용 Agent (선택)",
+      "tests/",
+      "  test_{module_name}.py"
+    ],
+    "registration": [
+      "1. main.py에 router 등록: app.include_router(router)",
+      "2. Agent 있으면 OrchestratorAgent.register() 등록",
+      "3. db/models.py에 모델 import 추가 (alembic 감지용)"
+    ]
+  },
+
+  "phase3_checklist": {
+    "description": "Phase 3 구현 전 Cursor 시작 체크포인트",
+    "before_coding": [
+      "saas_foundation.json @참조 확인",
+      "workflow_context.json @참조 확인",
+      "phase3_context.json @참조 확인",
+      "BaseAgent 상속 구조 이해 완료",
+      "tool_registry 등록 대상 Tool 확인"
+    ],
+    "per_agent": [
+      "Orch: register() 등록 여부 확인",
+      "Back-A: tenant_id 필터 포함 여부 확인",
+      "Back-A: audit_log 기록 여부 확인",
+      "Front-A: useAgent() 훅 사용 여부 확인",
+      "Front-A: ApprovalGate 적용 여부 확인 (비가역 액션)"
+    ]
+  },
+
+  "api_endpoints": {
+    "description": "Phase 3에서 구현할 API 엔드포인트 목록 및 기준",
+    "existing": [
+      "POST /api/v1/agents/invoke  ← Orch 경유 Agent 실행 (구현 완료)",
+      "GET  /api/v1/reuse/kpi      ← 재사용률 KPI (구현 완료)",
+      "GET  /health                ← 헬스체크 (구현 완료)",
+      "GET  /ready                 ← Readiness probe (구현 완료)"
+    ],
+    "to_implement": [
+      "POST /api/v1/auth/login     ← JWT 발급",
+      "POST /api/v1/auth/refresh   ← 토큰 갱신",
+      "GET  /api/v1/users          ← 사용자 목록",
+      "POST /api/v1/users          ← 사용자 등록",
+      "GET  /api/v1/menus          ← 메뉴 조회",
+      "GET  /api/v1/common-codes   ← 공통 코드 조회"
+    ],
+    "response_format": "{ success: bool, data: any, error: { code, message }, meta: { page, size, total } }"
+  }
+}

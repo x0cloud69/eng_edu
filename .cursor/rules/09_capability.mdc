@@ -1,0 +1,366 @@
+# Phase 3. Capability 구축 — 코드 생성 규칙
+# ─────────────────────────────────────────────────────────
+# 참조:
+#   @.cursor/context/system_prompt_context.json  ← System Prompt 5-Layer + G-00-1~8 + Injection 방어
+#   @.cursor/context/skill_context.json          ← Skill Registry + Core/Domain Skill 정의
+#   @.cursor/context/tool_context.json           ← Tool 분류 + Permission Matrix + Circuit Breaker
+#   @.cursor/context/memory_context.json         ← 4계층 Memory + DB 스키마 + Retrieval Rule
+#   @.cursor/context/phase3_context.json         ← Boilerplate 연계 기준
+#   @.cursor/context/workflow_context.json       ← Decision Gate + Escalation 규칙
+#   @.cursor/context/governance.json             ← Authority Level + Agent별 자율성
+#   @.cursor/context/hitl_context.json           ← P1/P2/P3 패턴 + SLA
+#   @.cursor/context/saas_foundation.json        ← 기술 스택 + DB 규칙
+#
+# 우선순위: 01_principles.mdc > 02_security.mdc > 07_scope_governance.mdc > 이 파일
+# ─────────────────────────────────────────────────────────
+
+## 이 파일의 역할
+
+Phase 3 Capability 구축 단계에서 Cursor가 생성하는 모든 코드에 적용되는
+System Prompt / Skill / Tool / Memory 관련 규칙을 정의한다.
+설계 상세는 각 context JSON 참조. 이 파일은 "무엇을 해야 하는가"만 강제한다.
+
+---
+
+## 규칙 1 — Agent 코드 생성 규칙 (System Prompt)
+
+### 1-1. 5-Layer System Prompt 구조 필수
+
+모든 Agent System Prompt는 반드시 아래 순서로 구성한다.
+
+```python
+# ✅ 5-Layer 순서 준수 필수
+SYSTEM_PROMPT_BACK_A = """
+=== Layer 1: Identity ===
+Agent Code    : Back-A
+Agent Name    : Backend Agent
+Version       : v1.0
+Authority     : L1
+Risk Level    : HIGH
+
+=== Layer 2: Authority ===
+Auto Execution: false
+Human Gate    : DB 변경 / 외부 API 호출 / 배포 승인
+HITL Pattern  : P1, P2, P3
+
+=== Layer 3: Scope ===
+Allowed Actions  : BaseAgent 상속 코드 생성, FastAPI 엔드포인트 생성, DB 쿼리 작성
+Forbidden Actions: Audit Log 없는 실행, 물리 DELETE, API Key 하드코딩
+Allowed Tools    : llm_call, db_query, db_write, api_call_internal, api_call_external
+Allowed Skills   : back.generate_db_migration, back.generate_agent_code, back.generate_api_endpoint
+
+=== Layer 4: Guardrail ===
+적용 Guardrail: G-00-1 ~ G-00-8 (전체 필수)
+
+=== Layer 5: Output Format ===
+출력 형식: AgentResult(success, data, explanation, trace_id, risk_level)
+trace_id 필수: true
+audit_log 필수: true
+"""
+
+# ❌ 금지
+SYSTEM_PROMPT = "너는 Backend Agent야. 코드를 생성해."  # 5-Layer 구조 없음
+```
+
+### 1-2. G-00-1~8 Guardrail 8개 전체 코드 반영 필수
+
+```python
+# ✅ execute() 시작 시 G-00-1, G-00-2 순서 체크
+async def execute(self, ctx: AgentContext, db=None) -> AgentResult:
+    # G-00-1: Authority Level 체크
+    if ctx.authority_level > self.authority_level:
+        await audit_log(ctx, "AUTHORITY_EXCEEDED")
+        raise AuthorityExceededException(self.name)
+
+    # G-00-2: Scope 체크
+    if not check_scope(ctx.action, self.allowed_actions):
+        await audit_log(ctx, "SCOPE_EXCEEDED")
+        raise ScopeExceededException(ctx.action)
+
+    try:
+        # ... 비즈니스 로직 ...
+        result = AgentResult(
+            success=True,
+            data=output,
+            explanation=f"실행 완료: {ctx.action}",  # G-00-8: explanation 필수
+            trace_id=ctx.trace_id,                   # G-00-3: trace_id 필수
+            risk_level=self.risk_level,
+        )
+        return result
+
+    finally:
+        # G-00-4: audit_log 필수
+        await AuditLogger.log(ctx, result)
+
+# ❌ 금지
+async def execute(self, ctx):
+    result = do_something()
+    return result  # Guardrail 없음, trace_id 없음, audit_log 없음
+```
+
+### 1-3. Injection 방어 패턴 INJ-01~05 필수
+
+```python
+# ✅ 외부 입력 Sanitize + LLM 응답 Validate
+from backend.src.core.security import sanitize_input, validate_response
+
+raw_input = ctx.payload.get("user_input", "")
+safe_input = sanitize_input(raw_input)   # INJ-01, INJ-02, INJ-03
+
+response = await llm_service.complete(
+    messages=[{"role": "user", "content": safe_input}]
+)
+validated = validate_response(response)   # INJ-04
+
+# ❌ 금지
+response = await llm_service.complete(
+    messages=[{"role": "user", "content": ctx.payload["user_input"]}]  # 원문 직접 삽입 금지
+)
+return response  # validate_response() 없이 반환 금지
+```
+
+---
+
+## 규칙 2 — Skill 호출 규칙
+
+### 2-1. Skill → Tool 호출 계층 준수 필수
+
+```python
+# ✅ Agent → Skill Registry → Skill → Tool Registry → Tool 순서
+from backend.src.core.skill_registry import skill_registry
+
+class BackendAgent(BaseAgent):
+    async def execute(self, ctx: AgentContext, db=None) -> AgentResult:
+        # skill_registry.invoke() 경유 필수
+        result = await skill_registry.invoke(
+            skill_name="back.generate_db_migration",
+            agent_code=self.name,
+            payload=ctx.payload,
+            trace_id=ctx.trace_id
+        )
+        return AgentResult(success=True, data=result, ...)
+
+# ❌ 절대 금지
+from backend.src.tools.db_write import DBWriteTool  # Tool 직접 import 금지
+result = await DBWriteTool().execute(query)           # Tool 직접 호출 금지
+```
+
+### 2-2. P1 필수 Skill — 승인 확인 로직 포함 필수
+
+```python
+# ✅ requires_approval=true Skill 호출 시 승인 확인 자동 처리
+# skill_registry 내부 처리 (Cursor가 skill_registry 구현 시 반드시 포함)
+async def invoke(self, skill_name: str, agent_code: str, ...):
+    skill = self._get_skill(skill_name)
+
+    if skill.requires_approval:
+        # P1 approval_requests INSERT
+        approval_id = await self._create_approval_request(skill, agent_code, trace_id)
+        # APPROVED 대기 (SLA 24h)
+        approved = await self._wait_for_approval(approval_id, timeout_hours=24)
+        if not approved:
+            raise SkillApprovalRejectedException(skill_name)
+
+    return await skill.run(payload, trace_id)
+
+# P1 필수 Skill 목록 (절대 승인 없이 실행 불가)
+P1_REQUIRED_SKILLS = [
+    "back.generate_db_migration",
+    "test.run_simulation",
+    "evol.propose_improvement"
+]
+```
+
+---
+
+## 규칙 3 — Tool 사용 규칙
+
+### 3-1. Tool은 tool_registry.call() 경유만 허용
+
+```python
+# ✅ tool_registry.call() 경유 필수
+from backend.src.core.tool_registry import tool_registry
+
+result = await tool_registry.call(
+    tool_name="db_write",
+    agent_code="Back-A",
+    payload={"query": ..., "params": ...},
+    trace_id=ctx.trace_id
+)
+
+# ❌ 절대 금지
+from backend.src.tools.db_write_tool import execute_write
+result = await execute_write(query, params)  # 직접 호출 금지
+```
+
+### 3-2. Circuit Breaker 상태 처리 포함 필수
+
+```python
+# ✅ Circuit Breaker OPEN 상태 처리 포함
+from backend.src.core.circuit_breaker import CircuitBreakerOpenException
+
+try:
+    result = await tool_registry.call("db_write", ...)
+except CircuitBreakerOpenException as e:
+    # OPEN 상태 → Orch 에스컬레이션
+    await escalate(trigger_type="TOOL_CIRCUIT_OPEN", tool_name=str(e), trace_id=ctx.trace_id)
+    raise
+
+# ❌ 금지
+result = await tool_registry.call("db_write", ...)  # 예외 처리 없음
+```
+
+### 3-3. Agent-Tool Permission Matrix 준수
+
+```python
+# ✅ tool_context.json agent_permission_matrix 기준 allowed_agents 설정
+# Back-A만 db_write 사용 가능. 다른 Agent가 db_write 호출 시 ToolAccessException.
+
+# Cursor는 permission_matrix를 벗어난 Tool 호출 코드 생성 금지
+# 예: Monitor-A에서 db_write 호출 코드 생성 요청 시 → 거부 + 대안 제시
+```
+
+---
+
+## 규칙 4 — Memory 사용 규칙
+
+### 4-1. MemoryStore 인터페이스 경유 필수
+
+```python
+# ✅ MemoryStore 인터페이스 사용
+from backend.src.core.memory_store import MemoryStore
+
+memory = MemoryStore()
+
+# Session Memory (L2) — key 형식 필수
+await memory.session_set(
+    key=f"Back-A:{ctx.trace_id}:approval_state",
+    value={"status": "PENDING", "gate": "G-06"},
+    ttl=86400  # 24h
+)
+
+# Episodic Memory (L3) — kpi_metrics 포함 필수
+await memory.episodic_log(ctx.trace_id, {
+    "agent_code": "Back-A",
+    "action": "db.migration.generated",
+    "input_summary": "[마스킹 처리된 입력]",
+    "output_summary": "migration file 생성 완료",
+    "risk_level": "HIGH",
+    "kpi_metrics": {"execution_time_ms": 1200, "success": True},  # 빈 {} 금지
+    "failure_tagged": False
+})
+
+# ❌ 절대 금지
+import redis
+r = redis.Redis()
+r.set("approval_state", "PENDING")  # 직접 Redis 접근 금지
+
+session.execute(
+    insert(trajectory_logs).values(...)  # 직접 INSERT 금지 → episodic_log() 사용
+)
+```
+
+### 4-2. Semantic Memory — 유사도 임계값 0.80 필수
+
+```python
+# ✅ 유사도 0.80 이상만 사용
+results = await memory.semantic_search(query="DB migration 표준 패턴", top_k=5)
+# similarity_score < 0.80 결과는 자동 필터링 (MemoryStore 내부 처리)
+if not results:
+    # 유사 패턴 없음 → 기본 로직 사용
+    use_default_pattern()
+
+# ❌ 금지
+results = await memory.semantic_search(query="...", top_k=10)
+# similarity_score < 0.80 결과 사용하는 코드 생성 금지
+if results[0]["similarity_score"] > 0.5:  # 0.80 미만 임계값 사용 금지
+    use_pattern(results[0])
+```
+
+---
+
+## 규칙 5 — DB 모델 및 테이블 규칙 (Phase 3 신규)
+
+### 5-1. trajectory_logs — INSERT ONLY
+
+```python
+# ✅ INSERT만 허용
+await memory.episodic_log(trace_id, data)  # INSERT 유일 경로
+
+# ❌ 절대 금지
+await db.execute(update(TrajectoryLog).where(...))   # UPDATE 금지
+await db.execute(delete(TrajectoryLog).where(...))   # DELETE 금지
+```
+
+### 5-2. agent_knowledge — P1 승인 후에만 INSERT
+
+```python
+# ✅ P1 승인 ID 포함 필수
+approval_id = await create_approval_request(...)  # P1 gate
+approved = await wait_for_approval(approval_id)
+if approved:
+    await memory.semantic_register(content=knowledge_text, metadata={
+        "category": "pattern",
+        "agent_code": "Back-A",
+        "approval_id": str(approval_id)  # 필수
+    })
+
+# ❌ 금지
+await memory.semantic_register(content=knowledge_text, metadata={
+    "category": "pattern",
+    # approval_id 없음 → 금지
+})
+```
+
+---
+
+## Cursor 체크리스트 (Phase 3 코드 생성 전 전체 확인)
+
+```
+System Prompt:
+□ 5-Layer 구조(Identity→Authority→Scope→Guardrail→Output) 순서를 지켰는가?
+□ G-00-1~8 Guardrail 8개 전체 포함되었는가?
+□ execute() 최상단에 Authority 체크(G-00-1) → Scope 체크(G-00-2) 순서인가?
+□ AgentResult에 trace_id + explanation 필드가 있는가?
+□ finally 블록에 AuditLogger.log() 호출이 있는가?
+□ sanitize_input() + validate_response() 양쪽 모두 적용되었는가?
+□ 타 Agent 직접 import/instantiate 코드가 없는가?
+□ .cursor/context/ 파일 write 코드가 없는가?
+
+Skill:
+□ Agent에서 skill_registry.invoke() 경유만 사용하는가?
+□ P1 필수 Skill (back.generate_db_migration, test.run_simulation, evol.propose_improvement)에 approval 대기 로직이 있는가?
+□ skill_name 형식이 {agent_prefix}.{action_name}인가?
+
+Tool:
+□ Agent에서 tool_registry.call() 경유만 사용하는가?
+□ Circuit Breaker 예외 처리(CircuitBreakerOpenException)가 포함되었는가?
+□ agent_permission_matrix 기준으로 allowed_agents를 설정했는가?
+□ db_write Tool 사용 시 async with db.begin() 트랜잭션이 있는가?
+□ api_call_external 사용 시 P1 approval 로직이 포함되었는가?
+
+Memory:
+□ Redis 직접 접근 없이 memory_store.session_get/set()만 사용하는가?
+□ Session Memory key 형식이 {agent_code}:{trace_id}:{key}인가?
+□ episodic_log() 호출 시 kpi_metrics 필드가 포함되었는가?
+□ semantic_register() 호출 시 approval_id가 포함되었는가?
+□ Semantic Memory 필터 로직에 similarity_score >= 0.80이 적용되었는가?
+□ trajectory_logs, agent_knowledge에 UPDATE/DELETE 쿼리가 없는가?
+```
+
+---
+
+## Cursor 생성 금지 목록 (Phase 3 전용)
+
+| 금지 패턴 | 이유 | 올바른 대안 |
+|-----------|------|------------|
+| Tool 직접 import/호출 | Skill→Tool 계층 위반 | `tool_registry.call()` |
+| Agent에서 타 Agent 직접 호출 | G-00-5 위반 | Orch 경유 |
+| `redis.Redis()` 직접 생성 | Memory 추상화 위반 | `memory_store.session_*()` |
+| `trajectory_logs` 직접 UPDATE/DELETE | INSERT ONLY 규칙 위반 | `memory_store.episodic_log()` |
+| `agent_knowledge` INSERT (approval_id 없음) | P1 미승인 등록 금지 | P1 승인 후 등록 |
+| P1 필수 Skill 승인 없이 실행 | G-00-4 + Skill 규칙 위반 | approval_requests INSERT 먼저 |
+| `execute()` 내 Guardrail 누락 | G-00-1~8 전체 필수 | 체크리스트 전체 확인 |
+| System Prompt 하드코딩 | INJ-05 위반 | 환경변수 또는 context JSON 로드 |
+| `validate_response()` 누락 LLM 응답 반환 | INJ-04 위반 | `validate_response()` 통과 후 반환 |
+| similarity_score < 0.80 Semantic 결과 사용 | 신뢰도 기준 위반 | 0.80 이상만 사용 |

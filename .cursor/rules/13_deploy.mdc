@@ -1,0 +1,176 @@
+# Phase 5 — Deploy & Monitoring 코드 생성 규칙
+# ─────────────────────────────────────────────
+# 참조: phase5_context.json, workflow_context.json, hitl_context.json, governance_rules_context.json
+# Gate: G-08 Release Gate (Approver: AI Architect + PM, HITL: P1, SLA: 24h)
+# ─────────────────────────────────────────────
+
+## 1. Monitor-A Agent 코드 규칙
+
+### 1.1 Agent 구조
+- **필수**: BaseAgent 상속, AgentContext → AgentResult 시그니처
+- **authority_level**: L0 (읽기 전용)
+- **allowed_tools**: ["db_query"] — db_write 절대 불가
+- **Orchestrator 등록**: `OrchestratorAgent.register("monitor.*", MonitorAgent())`
+
+### 1.2 Actions
+- `collect_kpi`: K-01 ~ K-07 데이터 수집 → trajectory_logs INSERT (Orch 경유)
+- `check_drift`: variance_pct 계산 → drift_level 판정
+- `get_dashboard`: 최신 KPI 상태 반환
+- `get_history`: 특정 KPI 이력 조회
+- `get_alerts`: 활성 Alert (status=OPEN) 조회
+
+### 1.3 Monitor-A 금지 사항
+```
+❌ DB 직접 쓰기 (db_write 없음)
+❌ Agent 중지/재시작 실행
+❌ Evolution 트리거 직접 실행
+❌ Human 승인 없는 설정 변경
+```
+
+## 2. KPI 수집 규칙
+
+### 2.1 trajectory_logs 필수 필드
+```python
+# 모든 KPI 수집 결과는 이 형식으로 기록
+{
+    "kpi_code": "K-01",           # 필수
+    "kpi_name": "프레임워크 채택률",  # 필수
+    "target_value": 70.0,          # 필수
+    "actual_value": 75.0,          # 필수
+    "variance_pct": 7.14,          # 자동 계산: (actual - target) / target × 100
+    "drift_level": "GREEN",        # 자동 판정
+    "measured_at": "...",           # UTC timestamp
+    "measured_by": "Monitor-A"     # 고정
+}
+```
+
+### 2.2 Drift Level 판정
+```python
+# governance_rules_context.json RISK-04 기준
+if abs(variance) <= 10:
+    drift_level = "GREEN"
+elif abs(variance) <= 20:
+    drift_level = "YELLOW"
+else:
+    drift_level = "RED"
+```
+
+### 2.3 KPI 코드 상수
+```python
+KPI_CODES = {
+    "K-01": "프레임워크 채택률",
+    "K-02": "공통 모듈 재사용률",
+    "K-03": "개발 기간 단축",
+    "K-04": "AI 승인 프로세스 단축",
+    "K-05": "감사 준비 기간 단축",
+    "K-06": "규제 준수율",
+    "K-07": "Drift 탐지 적용률",
+}
+```
+
+## 3. Alert 생성 규칙
+
+### 3.1 Alert 생성 조건
+```
+YELLOW drift → WARNING Alert (kpi_alerts INSERT)
+RED drift    → CRITICAL Alert (kpi_alerts INSERT + Evolution 제안)
+```
+
+### 3.2 Escalation 규칙
+```
+WARNING 4h 미응답 → CRITICAL 자동 승격
+CRITICAL 24h 미해결 → EMERGENCY 자동 승격
+```
+
+### 3.3 Alert 필수 필드
+```python
+{
+    "kpi_code": "K-02",
+    "drift_level": "YELLOW",
+    "actual_value": 38.5,
+    "target_value": 50.0,
+    "variance_pct": -23.0,
+    "status": "OPEN",
+    "notified_to": ["pm@example.com"],
+}
+```
+
+## 4. Docker 파일 규칙
+
+### 4.1 Dockerfile 필수 사항
+```
+✅ Multi-Stage Build (builder → runtime)
+✅ Non-root User (useradd appuser)
+✅ HEALTHCHECK (30s interval, 5s timeout, 3 retries)
+✅ EXPOSE 명시
+✅ .dockerignore 포함
+```
+
+### 4.2 docker-compose 규칙
+```
+✅ 환경 변수: .env 파일 참조 (env_file)
+✅ 볼륨: 영구 데이터 (pgdata 등)
+✅ depends_on: 서비스 의존성 명시
+✅ networks: 서비스간 격리 네트워크
+✅ restart: unless-stopped
+```
+
+### 4.3 환경 변수 금지 사항
+```
+❌ 하드코딩 Secret (password, api_key, token)
+❌ 프로덕션 DB 정보 직접 기재
+❌ .env 파일 Git 커밋
+```
+
+## 5. G-08 Release Gate 규칙
+
+### 5.1 배포 전 필수 확인 (17항목)
+- G-07 통과, Phase 4 테스트 Pass, Docker 빌드 성공
+- Health Check 통과, DB/Redis 연결 정상
+- Monitor-A 등록, KPI 수집 정상, Drift Detection 활성
+- Rollback 테스트 완료, Secret 하드코딩 없음
+
+### 5.2 승인 워크플로우
+```
+review_requests INSERT (gate_id=G-08)
+→ AI Architect 검토 (12h) + PM 검토 (12h)
+→ 양쪽 APPROVED → G-08 PASS → deploy.sh 실행
+```
+
+### 5.3 Post-Deploy 검증
+```
++1h:  Health Check 연속 성공
++6h:  KPI 수집 정상
++12h: Drift YELLOW/RED 없음
++24h: API 응답시간 500ms 이내
++48h: Post-Deploy Report 제출
+```
+
+## 6. 코드 금지 사항
+
+```
+❌ Monitor-A에서 db_write 사용
+❌ L0 Agent에서 상태 변경 코드
+❌ trajectory_logs UPDATE/DELETE
+❌ override_logs UPDATE/DELETE
+❌ Docker Secret 하드코딩
+❌ Health Check 없는 Dockerfile
+❌ G-08 미승인 상태에서 배포 실행
+❌ Rollback 전략 없는 배포 스크립트
+```
+
+## 7. Phase 5 → Phase 6 전환 코드 규칙
+
+### Phase 6 코드 생성 전제 조건
+```
+✅ G-08 Release Gate PASS
+✅ 프로덕션 48h 안정 운영
+✅ KPI 전체 GREEN
+✅ Monitor-A Drift Detection 활성
+✅ Post-Deploy Report 제출
+```
+
+### Phase 6 진입 시 추가되는 Agent
+```
+Evolution-A: Context 수정 제안 Agent (L2, G-09 Gate)
+```

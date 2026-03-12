@@ -1,0 +1,207 @@
+{
+  "_meta": {
+    "document": "1.1 Scope Definition",
+    "phase": "Phase 1 - Vision & Role 정의",
+    "project": "Standard Framework",
+    "version": "v1.0",
+    "author": "KY Song",
+    "created_at": "2026-03-09",
+    "source": "WBS/Methdology/1. Vision and Role/1.1 Problem Framing/1_1_Scope_Definition.md",
+    "description": "Scope 경계 Machine-readable 정의. Cursor AI가 코드 생성 시 In/Out Scope 판단에 이 파일을 참조한다.",
+    "change_log": [
+      {
+        "version": "v1.0",
+        "date": "2026-03-09",
+        "summary": "1.1 Scope Definition 초기 생성 — IS-01~IS-09, OS-01~OS-09 정의"
+      }
+    ]
+  },
+
+  "scope_principles": {
+    "principle_1": "Framework Level Only — 표준 구조·거버넌스 설계만. 실제 서비스 구현 제외.",
+    "principle_2": "Reusability First — 2개 이상 프로젝트에 재사용 가능한 항목만 포함.",
+    "principle_3": "Governance Boundary — AI 통제·감사·승인과 직접 연관된 것만 포함.",
+    "decision_questions": [
+      "Q1: 표준 구조 / 거버넌스 설계인가?",
+      "Q2: 2개 이상 프로젝트에 재사용 가능한가?",
+      "Q3: AI 통제·감사·승인과 직접 연관되는가?"
+    ]
+  },
+
+  "in_scope": [
+    {
+      "id": "IS-01",
+      "name": "AI-Native 시스템 참조 아키텍처",
+      "description": "Core Architecture Blueprint — 컴포넌트 구조, 레이어 정의, 의존성 순서, BaseAgent 패턴",
+      "includes": ["Architecture Blueprint 문서", "BaseAgent 클래스 정의", "컴포넌트 의존성 순서"],
+      "excludes": ["특정 도메인 아키텍처 설계", "특정 기관 전용 구조"],
+      "cursor_can_generate": ["BaseAgent 상속 클래스", "Core Architecture 구조 코드", "컴포넌트 인터페이스 정의"]
+    },
+    {
+      "id": "IS-02",
+      "name": "공통 컴포넌트 표준 설계",
+      "description": "인증(Auth), 로깅(Logging), 감사(Audit), API Gateway 등 공통 컴포넌트 표준",
+      "includes": ["공통 인터페이스 정의", "create_audit_log", "require_human_approval", "RBAC 데코레이터"],
+      "excludes": ["특정 기관 인증 시스템 연동", "특정 로그 저장소 연동 구현"],
+      "cursor_can_generate": ["공통 헬퍼 함수", "표준 미들웨어", "공통 스키마 정의"]
+    },
+    {
+      "id": "IS-03",
+      "name": "AI 거버넌스 기본 모델",
+      "description": "모델 승인, 배포, 모니터링, 책임 구조를 정의하는 거버넌스 모델",
+      "includes": ["승인 워크플로우", "Authority Level 체계", "모니터링 연동 구조", "Escalation 규칙"],
+      "excludes": ["특정 AI 모델 성능 평가", "도메인별 승인 기준 커스터마이징"],
+      "cursor_can_generate": ["승인 워크플로우 코드", "Authority Level 체크 로직", "Escalation 처리 코드"]
+    },
+    {
+      "id": "IS-04",
+      "name": "데이터 거버넌스 체계",
+      "description": "데이터 분류(Public/Internal/Sensitive/Restricted), RBAC, 보관 정책 표준",
+      "includes": ["데이터 등급 분류 기준", "RBAC 역할 정의", "암호화 정책", "데이터 최소 수집 원칙"],
+      "excludes": ["실제 데이터 이전·마이그레이션", "특정 DB 구현"],
+      "cursor_can_generate": ["data_classification 파라미터 포함 함수", "RBAC 데코레이터", "암호화 헬퍼"]
+    },
+    {
+      "id": "IS-05",
+      "name": "AI 의사결정 로그 및 추적성",
+      "description": "audit_logs, trajectory_logs 스키마 및 감사 체계 표준",
+      "includes": ["audit_logs 스키마", "trajectory_logs 구조", "로그 조회 API 설계"],
+      "excludes": ["로그 분석 대시보드 UI", "특정 SIEM 도구 연동"],
+      "cursor_can_generate": ["audit_logs INSERT 코드", "trajectory_logs 기록 코드", "로그 조회 API"]
+    },
+    {
+      "id": "IS-06",
+      "name": "Risk-Based Approval 프로세스",
+      "description": "리스크 등급별 차등 승인 절차 및 Human 개입 구조",
+      "includes": ["리스크 등급별 승인 절차", "Human-in-the-Loop 게이트 위치", "Escalation 규칙"],
+      "excludes": ["특정 조직 결재 시스템 연동", "완전 자동 승인 구현"],
+      "cursor_can_generate": ["Risk Level 체크 로직", "Human 승인 게이트 코드", "Escalation 처리"]
+    },
+    {
+      "id": "IS-07",
+      "name": "보안 기본 구조 (Zero-Trust)",
+      "description": "Zero-Trust 원칙 기반 JWT, RBAC, 암호화, Prompt Injection 방어 구조",
+      "includes": ["JWT 인증 구조", "RBAC 기반 접근 통제", "암호화 정책", "Input Validation"],
+      "excludes": ["특정 클라우드 보안 서비스 구현", "물리적 보안", "네트워크 방화벽 설정"],
+      "cursor_can_generate": ["JWT 인증 코드", "RBAC 데코레이터", "암호화 함수", "Input Sanitization"]
+    },
+    {
+      "id": "IS-08",
+      "name": "프레임워크 KPI 및 성공 지표",
+      "description": "프레임워크 도입 효과 측정을 위한 KPI 체계 및 측정 방법 정의",
+      "includes": ["KPI 정의 7개", "측정 시점", "기준값 설정 방법"],
+      "excludes": ["실시간 대시보드 UI 개발", "실제 KPI 집계 시스템 완전 구현"],
+      "cursor_can_generate": ["KPI 집계 로직", "측정 함수", "Drift 탐지 코드"]
+    },
+    {
+      "id": "IS-09",
+      "name": "파일럿 프로젝트 검증 기준",
+      "description": "파일럿 프로젝트 적용 시 검증 체크리스트, Acceptance Criteria, Regression Test 기준",
+      "includes": ["검증 체크리스트", "Acceptance Criteria", "Test Scenario 템플릿"],
+      "excludes": ["실제 파일럿 프로젝트 구현·배포", "도메인 테스트 시나리오"],
+      "cursor_can_generate": ["Test Scenario 코드", "Evaluation Report 자동화 코드", "Regression Test 구조"]
+    }
+  ],
+
+  "out_of_scope": [
+    {
+      "id": "OS-01",
+      "name": "특정 도메인 서비스 구현",
+      "examples": ["복지급여 시스템", "의료 진단 AI", "행정 민원 처리", "금융 심사 로직"],
+      "reason": "재사용성 원칙 위반 — 단일 도메인 전용 구조",
+      "cursor_action": "거부 + 대안 제시: 공통 프레임워크 구조만 제공, 도메인 로직은 별도 프로젝트에서 구현",
+      "alternative": "IS-01(아키텍처) 기반으로 도메인 프로젝트에서 확장 구현"
+    },
+    {
+      "id": "OS-02",
+      "name": "AI 모델 학습 / 파인튜닝",
+      "examples": ["학습 루프 구현", "파인튜닝 스크립트", "프롬프트 엔지니어링 최적화", "학습 데이터 전처리"],
+      "reason": "모델 구현은 프레임워크 사용자 영역 — 프레임워크는 통제 구조만 정의",
+      "cursor_action": "거부 + 대안 제시: LLMService 인터페이스 경유 호출 코드만 생성",
+      "alternative": "LLMService.complete() 호출 구조로 대체"
+    },
+    {
+      "id": "OS-03",
+      "name": "물리적 인프라 구축",
+      "examples": ["서버 프로비저닝", "AWS 인프라 Terraform", "네트워크 방화벽 설정", "물리 DB 구축"],
+      "reason": "인프라는 조직·클라우드 환경에 따라 상이 — 프레임워크는 인프라 중립",
+      "cursor_action": "거부 + 대안 제시: DB 스키마 및 마이그레이션 표준만 제공",
+      "alternative": "Alembic 마이그레이션 파일 생성 수준으로 제한"
+    },
+    {
+      "id": "OS-04",
+      "name": "특정 기관 맞춤형 커스터마이징",
+      "examples": ["A기관 전용 결재 라인", "B기관 DB 스키마 직접 연동", "특정 조직도 기반 권한 구조"],
+      "reason": "단일 기관 전용 설계 — 재사용성 원칙 위반",
+      "cursor_action": "거부 + 대안 제시: Extension Point 설계 구조만 정의",
+      "alternative": "플러그인/확장 포인트 인터페이스로 대체"
+    },
+    {
+      "id": "OS-05",
+      "name": "UI/UX 상세 화면 설계",
+      "examples": ["사용자 화면 픽셀 구현", "디자인 시스템 전체 구축", "도메인 서비스 UI 플로우"],
+      "reason": "UI는 도메인·조직별 상이 — 거버넌스 UI 컴포넌트(ApprovalGate)만 표준화",
+      "cursor_action": "거부 + 대안 제시: ApprovalGate, 공통 UI 컴포넌트 수준만 제공",
+      "alternative": "공통 ApprovalGate 컴포넌트로 대체"
+    },
+    {
+      "id": "OS-06",
+      "name": "완전한 DevOps 파이프라인 구현",
+      "examples": ["GitHub Actions CI/CD 전체", "배포 자동화 스크립트", "IaC 완성"],
+      "reason": "DevOps 환경은 조직·도구에 따라 다름 — Release Gate 기준만 정의",
+      "cursor_action": "거부 + 대안 제시: 배포 기준 및 Release Gate 체크리스트만 제공",
+      "alternative": "배포 전 체크리스트 및 Gate 조건 정의로 대체"
+    },
+    {
+      "id": "OS-07",
+      "name": "글로벌 규제별 법률 해석",
+      "examples": ["EU AI Act 자동 컴플라이언스 판단", "국가별 규제 자동 적용 로직"],
+      "reason": "법률 해석은 법무 전문가 영역 — 프레임워크는 감사 구조만 제공",
+      "cursor_action": "거부 + 대안 제시: 규정 준수 감사 로그 구조만 제공",
+      "alternative": "감사 로그 및 규제 준수 체크리스트 구조로 대체"
+    },
+    {
+      "id": "OS-08",
+      "name": "대규모 학습 데이터 구축",
+      "examples": ["데이터 크롤링 스크립트", "레이블링 자동화", "학습 데이터셋 생성"],
+      "reason": "데이터 구축은 도메인 특화 작업 — 프레임워크는 데이터 거버넌스 구조만 정의",
+      "cursor_action": "거부 + 대안 제시: 데이터 분류 및 접근 통제 구조만 제공",
+      "alternative": "data_classification 정책 및 접근 통제 코드로 대체"
+    },
+    {
+      "id": "OS-09",
+      "name": "예산 집행 및 조직 개편",
+      "examples": ["예산 승인 ERP 연동", "조직도 자동 변경 로직", "HR 시스템 연동"],
+      "reason": "경영 의사결정 영역 — 기술·거버넌스 구조 범위 외",
+      "cursor_action": "거부 + 대안 제시: 해당 영역은 프레임워크 범위 외, 별도 프로젝트로 분리",
+      "alternative": "Governance Board 역할 정의 수준으로 대체"
+    }
+  ],
+
+  "scope_change_control": {
+    "requires_approval": ["AI Architect", "Business Owner", "Governance Board"],
+    "trigger_conditions": [
+      "새로운 규제 요건 추가로 기존 Scope로 충족 불가",
+      "이해관계자 목표 변경으로 Scope 재정의 필요",
+      "Phase 4 파일럿 검증 결과 IS 항목 조정 필요",
+      "Drift 또는 KPI 미달로 구조적 Scope 확장 필요"
+    ],
+    "documents_to_update_on_change": [
+      "1_1_Scope_Definition.md",
+      "scope_context.json (이 파일)",
+      ".cursor/rules/07_scope_governance.mdc",
+      ".cursor/context/project_context.json (scope 섹션)"
+    ]
+  },
+
+  "cursor_decision_flow": {
+    "description": "Cursor가 코드 생성 요청 수신 시 적용하는 의사결정 순서",
+    "steps": [
+      "Step 1: 요청 항목이 out_of_scope 목록에 해당하는지 확인 → 해당 시 거부 + cursor_action 제시",
+      "Step 2: 요청 항목이 in_scope 목록에 해당하는지 확인 → 해당 시 cursor_can_generate 범위 내 생성",
+      "Step 3: 명확하지 않은 경우 scope_principles.decision_questions 3문항 적용",
+      "Step 4: 3문항 결과가 모두 Yes → In-Scope로 판단 후 생성",
+      "Step 5: 3문항 중 하나라도 No → Out-of-Scope로 판단 + 대안 제시"
+    ]
+  }
+}

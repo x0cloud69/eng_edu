@@ -1,0 +1,81 @@
+# AI Context 관리 규칙 (0_2 기반)
+# ─────────────────────────────────────────────────────────
+# .cursor/context/ 폴더 구조와 사용 방식을 정의한다.
+# ─────────────────────────────────────────────────────────
+
+## Context 3계층 구조
+
+```
+Level 1: Global Strategic Context
+  → .cursor/context/project_context.json
+  → Scope, Authority, KPI, Risk, Governance 포함
+  → 모든 Agent 실행 전 반드시 로드
+
+Level 2: Agent-Specific Context
+  → .cursor/context/agents/{agent_name}_context.json
+  → Agent별 허용 범위, Skill, Tool 접근 제한
+  → Global Context로부터 자동 생성 (직접 수정 금지)
+
+Level 3: Runtime Context
+  → 세션 단위 입력값, 사용자 상태, 동적 변수
+  → DB 또는 메모리에서 관리
+  → Global/Agent Context를 변경할 수 없음
+```
+
+## Context 파일 구조
+
+```
+.cursor/
+└── context/
+    ├── project_context.json       ← Global (Phase 1 산출물)
+    ├── governance.json            ← 거버넌스 규칙 (0_1 기반)
+    ├── operation_standards.json   ← 운영 표준 요약 (0_0 기반)
+    └── agents/                    ← Phase 3 구현 시 생성 예정 (현재 미생성)
+        ├── orchestrator_context.json   ← Phase 3 생성
+        ├── capability_context.json     ← Phase 3 생성
+        ├── qc_context.json             ← Phase 3 생성
+        ├── monitoring_context.json     ← Phase 3 생성
+        └── evolution_context.json      ← Phase 3 생성
+```
+
+> ⚠️ **agents/ 서브폴더는 Phase 3 코드 구현 시 생성 예정.** Phase 1~2 기간에는 Global Context(project_context.json, governance.json 등)만 로드. Phase 3 시작 전 반드시 generate_agent_contexts() 스크립트로 Global Context 기반 자동 생성.
+
+## 코드 규칙
+
+- 모든 Agent는 실행 시작 시 Global Context 로드 필수
+- Agent Context는 직접 수정 금지 → Global 기반 재생성
+- Runtime Context는 Global/Agent Context 변경 불가
+- Context 변경 시 버전 증가 + Change Log 기록 필수
+
+```python
+# 올바른 방법
+class BaseAgent:
+    def __init__(self):
+        self.global_ctx = load_global_context()      # 반드시 로드
+        self.agent_ctx  = load_agent_context(self.name)  # 반드시 로드
+
+# 잘못된 방법
+class BadAgent:
+    def run(self):
+        # Context 로드 없이 바로 실행 → 금지
+        do_something()
+```
+
+## Context 변경 절차 (반드시 준수)
+
+```
+1. KPI 또는 Risk 변화 감지
+2. Risk 재평가 수행
+3. Global Context 수정 제안 작성
+4. Governance Board 승인
+5. Agent Context 자동 재생성
+6. Regression Test 수행
+7. 승인 후 재배포
+```
+
+## 버전 관리 규칙
+
+- Context 파일 내 "_meta.version" 필드 필수
+- 변경 시 버전 증가: v1.0 → v1.1
+- Change Log 기록: "_meta.change_log" 배열에 추가
+- 이전 버전 보관: context/archive/ 폴더에 스냅샷 저장

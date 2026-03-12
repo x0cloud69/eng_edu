@@ -1,0 +1,305 @@
+# Phase 3. Human-in-the-Loop 패턴 — 코드 생성 규칙
+# ─────────────────────────────────────────────────────────
+# 참조:
+#   @.cursor/context/hitl_context.json     ← P1/P2/P3 패턴 + SLA + DB 스키마
+#   @.cursor/context/workflow_context.json ← Decision Gate G-01~G-09
+#   @.cursor/context/governance.json       ← Authority Level L0-L3
+#
+# 우선순위: 01_principles.mdc > 02_security.mdc > 이 파일
+# ─────────────────────────────────────────────────────────
+
+## 이 파일의 역할
+
+hitl_context.json의 P1/P2/P3 패턴을 Cursor 코드 생성 시 강제한다.
+"어떤 상황에 어떤 코드를 써야 하는가"를 정의한다.
+
+---
+
+## HITL 패턴 한 줄 요약
+
+| 패턴 | 시점 | 사용 상황 | SLA |
+|------|------|-----------|-----|
+| **P1** | 실행 전 사전 승인 | 비가역 작업 (DB변경·외부호출·배포) | 24h |
+| **P2** | 실행 중 위험 감지 | Risk HIGH 임계값 도달 즉시 | 2h |
+| **P3** | 실행 후 검토 | 코드 생성·보고서·제안서 결과물 | 48h |
+
+---
+
+## 규칙 1 — P1: 사전 승인 패턴 (Pre-Approval)
+
+**적용 대상**: DB 스키마 변경(G-06), 외부 API 호출, 배포 트리거, Semantic Memory 등록
+
+```python
+# ✅ P1 패턴 표준 코드
+from backend.src.core.hitl import create_approval_request, wait_for_approval
+from backend.src.core.exceptions import ApprovalRejectedException, ApprovalTimeoutException
+
+async def execute_with_p1_gate(self, ctx: AgentContext, db) -> AgentResult:
+    # Step 1: approval_requests INSERT
+    approval_id = await create_approval_request(
+        db=db,
+        org_id=ctx.org_id,
+        agent_code=self.name,
+        action=ctx.action,
+        gate_id="G-06",           # workflow_context.json gates 기준
+        payload_summary=mask_pii(str(ctx.payload)),
+        risk_level="HIGH",
+        trace_id=ctx.trace_id,
+        requested_by=ctx.user_id
+    )
+
+    # Step 2: APPROVED 상태 대기 (SLA 24h)
+    approved = await wait_for_approval(
+        approval_id=approval_id,
+        timeout_hours=24
+    )
+
+    if not approved:
+        await audit_log(ctx, "P1_APPROVAL_REJECTED", {"approval_id": str(approval_id)})
+        raise ApprovalRejectedException(gate_id="G-06", approval_id=approval_id)
+
+    # Step 3: 승인 후 실행
+    result = await self._do_execute(ctx, db)
+    await audit_log(ctx, "P1_APPROVED_EXECUTED", {"approval_id": str(approval_id)})
+    return result
+
+# ❌ 절대 금지
+async def execute(self, ctx, db):
+    # P1 없이 DB 변경 — 금지
+    await tool_registry.call("db_write", ...)
+```
+
+**Frontend ApprovalGate (P1):**
+```tsx
+// ✅ P1 대상 액션에 반드시 ApprovalGate 적용
+<ApprovalGate
+  pattern="P1"
+  level="L1"
+  traceId={traceId}
+  agentCode="Back-A"
+  actionLabel="DB 스키마 변경 (G-06)"
+  riskLevel="HIGH"
+  onApprove={handleApprove}
+  onReject={handleReject}
+>
+  <Button variant="destructive">스키마 변경 실행</Button>
+</ApprovalGate>
+
+// ❌ 절대 금지
+<Button onClick={handleSchemaChange}>스키마 변경</Button>  // P1 게이트 없음
+window.confirm("변경하시겠습니까?")                         // confirm 금지
+```
+
+---
+
+## 규칙 2 — P2: 위험 감지 패턴 (On-Risk Override)
+
+**적용 대상**: KPI 20% 이상 하락, CRITICAL Risk 감지, 반복 실패 3회 이상
+
+```python
+# ✅ P2 패턴 표준 코드 — Risk 감지 즉시 Human에 전달
+from backend.src.core.hitl import create_override_request, escalate_to_human
+
+async def handle_risk_event(self, ctx: AgentContext, risk_event: dict, db):
+    # Step 1: override_logs INSERT (즉시 — SLA 2h)
+    override_id = await create_override_request(
+        db=db,
+        org_id=ctx.org_id,
+        agent_code=self.name,
+        trigger_type=risk_event["type"],   # DRIFT_DETECTED / REPEATED_FAILURE 등
+        risk_level=risk_event["level"],
+        description=risk_event["description"],
+        trace_id=ctx.trace_id
+    )
+
+    # Step 2: 즉시 알림 발송 (SLA 2h 카운트다운 시작)
+    await escalate_to_human(
+        override_id=override_id,
+        sla_hours=2,
+        notify_roles=["architect", "pm"]
+    )
+
+    # Step 3: Human 판단 대기 — 이 시점에서 Agent 실행 일시 정지
+    decision = await wait_for_override_decision(override_id, timeout_hours=2)
+
+    if decision == "STOP":
+        await audit_log(ctx, "P2_HUMAN_STOPPED")
+        raise HumanStoppedException(override_id=override_id)
+    elif decision == "CONTINUE":
+        await audit_log(ctx, "P2_HUMAN_CONTINUED")
+        # 계속 진행
+    elif decision == "TIMEOUT":
+        # 2h SLA 초과 시 자동 실행 중단
+        raise EscalationTimeoutException(override_id=override_id)
+
+# ✅ Monitor-A에서 Drift 감지 시 P2 자동 트리거
+async def detect_and_escalate(self, ctx, kpi_drop_percent: float):
+    if kpi_drop_percent >= 20:
+        await self.handle_risk_event(ctx, {
+            "type": "DRIFT_DETECTED",
+            "level": "HIGH",
+            "description": f"KPI {kpi_drop_percent:.1f}% 하락 감지"
+        }, db=None)
+
+# ❌ 금지
+if kpi_drop_percent >= 20:
+    pass  # P2 트리거 없이 무시 금지
+```
+
+**Frontend P2 알림 UI:**
+```tsx
+// ✅ P2 위험 감지 시 RiskBanner + 즉시 처리 버튼
+{riskEvent && (
+  <RiskBanner
+    riskLevel="HIGH"
+    traceId={traceId}
+    message={riskEvent.description}
+    actions={[
+      <Button key="stop" variant="destructive" onClick={handleStop}>실행 중단</Button>,
+      <Button key="cont" variant="secondary" onClick={handleContinue}>계속 진행</Button>
+    ]}
+  />
+)}
+```
+
+---
+
+## 규칙 3 — P3: 사후 검토 패턴 (Post-Review)
+
+**적용 대상**: 코드 생성 결과, Evaluation Report, Context 개선 제안서
+
+```python
+# ✅ P3 패턴 표준 코드 — 결과물 생성 후 검토 요청
+from backend.src.core.hitl import create_review_request
+
+async def execute_with_p3_review(self, ctx: AgentContext, db) -> AgentResult:
+    # Step 1: 실행 완료
+    result = await self._generate_output(ctx, db)
+
+    # Step 2: review_requests INSERT (SLA 48h)
+    review_id = await create_review_request(
+        db=db,
+        org_id=ctx.org_id,
+        agent_code=self.name,
+        action=ctx.action,
+        output_summary=mask_pii(str(result.data)),
+        trace_id=ctx.trace_id,
+        reviewer_role="architect"  # rr_matrix_context.json 기준
+    )
+
+    # Step 3: 검토 대기 없이 즉시 반환 (P3는 비블로킹)
+    result.review_id = review_id
+    result.status = "PENDING_REVIEW"  # 검토 완료 전까지 PENDING 상태
+    await audit_log(ctx, "P3_REVIEW_REQUESTED", {"review_id": str(review_id)})
+    return result
+
+# ❌ 금지
+async def execute(self, ctx, db):
+    result = await self._generate_output(ctx, db)
+    return result  # P3 review_requests INSERT 없이 반환 금지
+```
+
+**P3 검토 상태 UI:**
+```tsx
+// ✅ PENDING_REVIEW 상태 표시
+<AgentStatusBadge
+  status="PENDING_REVIEW"
+  agentCode="Back-A"
+  reviewId={reviewId}
+/>
+
+// ✅ 검토 완료/거부 처리
+{reviewStatus === 'APPROVED' && <Badge variant="success">검토 완료</Badge>}
+{reviewStatus === 'REJECTED' && (
+  <Badge variant="destructive">검토 반려</Badge>
+)}
+```
+
+---
+
+## 규칙 4 — Decision Gate 연결 필수
+
+workflow_context.json G-01~G-09 게이트와 HITL 패턴 연결:
+
+| Gate | 설명 | 패턴 | Agent |
+|------|------|------|-------|
+| G-01 | Problem Framing 완료 승인 | P1 | Orch |
+| G-02 | Persona 정의 승인 | P1 | Orch |
+| G-03 | Agent Role 확정 승인 | P1 | Orch |
+| G-04 | Workflow 설계 승인 | P1 | Orch |
+| G-05 | System Prompt 완성 승인 | P1 | Orch |
+| G-06 | DB Schema 변경 승인 | P1 | Back-A |
+| G-07 | Simulation 시나리오 승인 | P1 | Test-A |
+| G-08 | 배포 전 최종 승인 | P1 | Orch |
+| G-09 | Context 수정 제안 승인 | P1 | Evol-A |
+
+```python
+# ✅ Gate ID를 create_approval_request()에 명시적 전달
+approval_id = await create_approval_request(
+    ...
+    gate_id="G-06",   # 반드시 workflow_context.json gates 기준 ID 사용
+    ...
+)
+
+# ❌ 금지
+approval_id = await create_approval_request(
+    ...
+    gate_id="custom_gate",  # 임의 gate_id 금지
+    ...
+)
+```
+
+---
+
+## 규칙 5 — SLA 타임아웃 처리 필수
+
+```python
+# ✅ SLA 초과 시 자동 처리 포함
+try:
+    approved = await wait_for_approval(approval_id, timeout_hours=24)
+except ApprovalTimeoutException:
+    # P1 24h 초과 → 자동 취소 + Escalation
+    await audit_log(ctx, "P1_SLA_EXCEEDED")
+    await escalate_to_human(override_id, sla_hours=2, notify_roles=["pm"])
+    raise
+
+try:
+    decision = await wait_for_override_decision(override_id, timeout_hours=2)
+except EscalationTimeoutException:
+    # P2 2h 초과 → 자동 실행 중단 (안전 원칙 우선)
+    await audit_log(ctx, "P2_SLA_EXCEEDED_AUTO_STOP")
+    raise HumanStoppedException(override_id=override_id)
+
+# ❌ 금지
+approved = await wait_for_approval(approval_id, timeout_hours=24)
+# 타임아웃 예외 처리 없음 — 금지
+```
+
+---
+
+## Cursor 체크리스트 (HITL 코드 생성 전)
+
+```
+P1:
+□ 비가역 작업(DB 변경, 외부 API, 배포) 전 create_approval_request() 호출이 있는가?
+□ gate_id가 G-01~G-09 중 하나인가?
+□ wait_for_approval(timeout_hours=24) 호출이 있는가?
+□ ApprovalTimeoutException 처리 코드가 있는가?
+□ Frontend에 ApprovalGate 컴포넌트가 적용되었는가?
+
+P2:
+□ KPI 20% 이상 하락 감지 시 create_override_request() 호출이 있는가?
+□ escalate_to_human(sla_hours=2) 호출이 있는가?
+□ TIMEOUT 시 자동 중단 처리가 있는가?
+□ Frontend에 RiskBanner + 처리 버튼이 있는가?
+
+P3:
+□ 결과물 생성 후 create_review_request() 호출이 있는가?
+□ reviewer_role이 rr_matrix_context.json 기준인가?
+□ P3는 비블로킹 — wait_for_review() 없이 즉시 반환하는가?
+□ result.status = "PENDING_REVIEW" 가 포함되었는가?
+
+공통:
+□ 모든 HITL 액션이 audit_log에 기록되는가?
+□ mask_pii()가 payload/output 저장 전 적용되었는가?
+```

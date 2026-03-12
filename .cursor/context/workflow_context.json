@@ -1,0 +1,174 @@
+{
+  "_meta": {
+    "document": "Phase 2. Agent Workflow Design",
+    "version": "v1.1",
+    "created_by": "KY Song",
+    "date": "2026-03-09",
+    "description": "Phase 3 코드 구현의 직접 기준. Agent 계층·Workflow·Gate·Tool·Escalation·Interaction Spec 통합.",
+    "references": ["0_3 멀티에이전트 구조 표준 v1.0", "0_4 리스크 관리 표준 v1.0", "governance_rules_context.json"],
+    "change_log": [
+      { "version": "v1.0", "date": "2026", "summary": "Phase 2 초기 생성" },
+      { "version": "v1.1", "date": "2026-03-09", "summary": "G-09 SLA 48h→24h 수정 / references에 governance_rules_context.json 추가" }
+    ]
+  },
+
+  "layer_model": {
+    "description": "5개 Layer로 역할 분리. 단일 Agent에 전략+실행+모니터링 집중 금지.",
+    "layers": [
+      { "id": "L1", "name": "Orchestrator", "agent": "Orch",                     "authority": "L1", "risk": "HIGH",   "role": "전체 Workflow 조정, Escalation 판단, Decision Gate 실행" },
+      { "id": "L2", "name": "Capability",   "agent": ["UIUX-A","Front-A","Back-A"],"authority": "L1", "risk": "MED·HIGH","role": "실제 기능 수행 — LLM·Tool·Skill 호출, Scope 내 작업" },
+      { "id": "L3", "name": "QualityControl","agent": "Test-A",                   "authority": "L1", "risk": "MEDIUM", "role": "테스트 수행, Risk 검증, Guardrail 점검" },
+      { "id": "L4", "name": "Monitoring",   "agent": "Monitor-A",                 "authority": "L0", "risk": "LOW",    "role": "KPI 모니터링, Drift 탐지, Incident 트리거" },
+      { "id": "L5", "name": "Evolution",    "agent": "Evol-A",                    "authority": "L1", "risk": "HIGH",   "role": "로그 분석, Context 수정 제안, 재배포 트리거" }
+    ],
+    "control_rules": [
+      "Capability Agent는 Orchestrator 승인 없이 직접 실행 권한 불가",
+      "Layer 간 직접 권한 상승 금지 — Governance Board 경유 필수",
+      "단일 Agent에 전략+실행+모니터링 동시 담당 금지",
+      "모든 Agent는 실행 전 Global Context 반드시 로드",
+      "Evolution Agent는 Context 수정 제안만 가능, 직접 적용 절대 금지"
+    ]
+  },
+
+  "workflow_phases": [
+    { "phase": "Phase 1", "name": "Vision & Role 정의", "lead": "Human 주도",        "agents": ["Orch(보조)"], "key_gate": ["G-01 Persona 확정","G-02 R&R 승인","G-03 Authority 승인"] },
+    { "phase": "Phase 2", "name": "Agent Workflow 설계","lead": "Orch 주도",          "agents": ["Orch"],       "key_gate": ["G-04 Workflow 설계 승인"] },
+    { "phase": "Phase 3", "name": "구현 (Build)",        "lead": "Front-A / Back-A", "agents": ["Front-A","Back-A","Orch"],"key_gate": ["G-05 코드 리뷰","G-06 DB 변경 승인"] },
+    { "phase": "Phase 4", "name": "테스트 (Test)",       "lead": "Test-A / Orch",    "agents": ["Test-A","Orch"],"key_gate": ["G-07 Evaluation Report 확정"] },
+    { "phase": "Phase 5", "name": "배포 (Deploy)",       "lead": "Back-A / Monitor-A","agents": ["Back-A","Monitor-A"],"key_gate": ["G-08 Release Gate"] },
+    { "phase": "Phase 6", "name": "진화 (Evolve)",       "lead": "Monitor-A / Evol-A","agents": ["Monitor-A","Evol-A","Orch"],"key_gate": ["G-09 Context 수정 승인"] }
+  ],
+
+  "standard_flow": {
+    "description": "모든 Phase에 공통 적용되는 표준 실행 흐름",
+    "steps": [
+      { "step": 1, "name": "요청 입력",       "actor": "Human / 외부 트리거" },
+      { "step": 2, "name": "Context 로드",    "actor": "모든 Agent",    "rule": "Global Context + Agent Context 반드시 로드" },
+      { "step": 3, "name": "Orch 수신",       "actor": "Orch",          "rule": "요청 분석 + Agent 할당" },
+      { "step": 4, "name": "Decision Gate",   "actor": "Human",         "rule": "P1 Pre-approval — 미승인 시 대기", "gate": "해당 Gate ID" },
+      { "step": 5, "name": "Capability 실행", "actor": "L2 Agent",      "rule": "Scope 내 작업만 수행" },
+      { "step": 6, "name": "Tool 호출",       "actor": "L2 Agent",      "rule": "allowed_tools 내에서만" },
+      { "step": 7, "name": "QC 검증",         "actor": "Test-A",        "rule": "Risk 검증 + Guardrail 점검" },
+      { "step": 8, "name": "Post-review",     "actor": "Human",         "rule": "P3 Post-review — 미확정 산출물 배포 불가" },
+      { "step": 9, "name": "Monitoring",      "actor": "Monitor-A",     "rule": "KPI 기록 + Drift 탐지" },
+      { "step":10, "name": "audit_logs 기록", "actor": "모든 Agent",    "rule": "필수 — 모든 실행 결과 기록" }
+    ],
+    "on_risk_interrupt": "P2 On-risk 감지 시 Step 5~7 즉시 중단 → Orch 에스컬레이션 → Human 조치 → 재개 또는 롤백"
+  },
+
+  "decision_gates": [
+    { "id": "G-01", "name": "Persona 확정 Gate",         "phase": "Phase 1 (1.2)",  "approver": "UX Designer",          "hitl": "P3", "sla_hours": 48 },
+    { "id": "G-02", "name": "R&R Matrix 승인 Gate",       "phase": "Phase 1 (1.3)",  "approver": "PM + AI Architect",    "hitl": "P3", "sla_hours": 48 },
+    { "id": "G-03", "name": "Authority Level 승인 Gate",  "phase": "Phase 1 (1.4)",  "approver": "Business Owner",       "hitl": "P1", "sla_hours": 24 },
+    { "id": "G-04", "name": "Workflow 설계 승인 Gate",    "phase": "Phase 2",         "approver": "AI Architect",         "hitl": "P1", "sla_hours": 24 },
+    { "id": "G-05", "name": "코드 리뷰 Gate",             "phase": "Phase 3",         "approver": "Front-H / Back-H",     "hitl": "P3", "sla_hours": 48 },
+    { "id": "G-06", "name": "DB 변경 승인 Gate",          "phase": "Phase 3 (DB)",    "approver": "AI Architect + DevOps","hitl": "P1", "sla_hours": 24 },
+    { "id": "G-07", "name": "Evaluation Report 확정 Gate","phase": "Phase 4",         "approver": "QA Engineer",          "hitl": "P3", "sla_hours": 48 },
+    { "id": "G-08", "name": "Release Gate",               "phase": "Phase 5",         "approver": "AI Architect + PM",    "hitl": "P1", "sla_hours": 24 },
+    { "id": "G-09", "name": "Context 수정 승인 Gate",     "phase": "Phase 6",         "approver": "Governance Board",     "hitl": "P1", "sla_hours": 24 }
+  ],
+
+  "gate_handling": {
+    "APPROVED":  { "action": "Agent 실행 재개",                          "log": "status=APPROVED, approver, approved_at" },
+    "REJECTED":  { "action": "Agent 실행 취소 + 요청자 알림",            "log": "status=REJECTED, reason, rejected_by" },
+    "REVISED":   { "action": "수정 사항 명시 → Agent 재작업",            "log": "status=REVISED, revision_note" },
+    "ESCALATED": { "action": "상위 승인자 자동 에스컬레이션",             "log": "status=ESCALATED, escalated_at" },
+    "OVERRIDE":  { "action": "즉시 중단 + Snapshot 저장 (3초 내)",       "log": "event=OVERRIDE, triggered_by, affected_agents" }
+  },
+
+  "tools": [
+    { "name": "llm_call",           "agents": ["UIUX-A","Front-A","Back-A"], "requires_approval": false, "audit_required": true,  "constraints": ["max_tokens 제한", "Prompt Injection 방어 필수"] },
+    { "name": "db_query",           "agents": ["Back-A"],                    "requires_approval": false, "audit_required": false, "constraints": ["SELECT 조회만", "트랜잭션 불필요"] },
+    { "name": "db_write",           "agents": ["Back-A"],                    "requires_approval": true,  "audit_required": true,  "constraints": ["트랜잭션 필수", "Gate G-06 승인 필수"] },
+    { "name": "api_call_internal",  "agents": ["Back-A","Orch"],             "requires_approval": false, "audit_required": true,  "constraints": ["RBAC 인증 필수", "useAgent 훅 경유"] },
+    { "name": "api_call_external",  "agents": ["Back-A"],                    "requires_approval": true,  "audit_required": true,  "constraints": ["Human 승인 필수", "API Key 환경변수"] },
+    { "name": "file_read",          "agents": ["all"],                       "requires_approval": false, "audit_required": false, "constraints": ["허용 디렉토리만", "민감 데이터 마스킹"] },
+    { "name": "file_write",         "agents": ["Back-A","Front-A"],          "requires_approval": true,  "audit_required": true,  "constraints": ["Human 승인 필수"] },
+    { "name": "send_notification",  "agents": ["Orch","Monitor-A"],          "requires_approval": false, "audit_required": false, "constraints": ["수신자 허용 목록 내"] },
+    { "name": "run_test",           "agents": ["Test-A"],                    "requires_approval": false, "audit_required": true,  "constraints": ["프로덕션 DB 접근 금지", "결과 trajectory_logs 기록"] },
+    { "name": "read_logs",          "agents": ["Monitor-A","Evol-A"],        "requires_approval": false, "audit_required": false, "constraints": ["SELECT 조회만", "외부 전송 금지"] }
+  ],
+
+  "tool_invocation_flow": [
+    { "step": 1, "action": "Tool 호출 요청",  "rule": "Agent가 Tool 호출 결정" },
+    { "step": 2, "action": "Scope 검증",      "rule": "allowed_tools 목록 대조 — 불일치 시 즉시 차단" },
+    { "step": 3, "action": "Risk 체크",       "rule": "HIGH 이상 시 Human 승인 요청" },
+    { "step": 4, "action": "Tool 실행",       "rule": "허용 범위 내 실행" },
+    { "step": 5, "action": "결과 검증",       "rule": "Output 유효성 확인" },
+    { "step": 6, "action": "Audit Log 기록",  "rule": "필수 — 모든 Tool 실행 결과 audit_logs INSERT" }
+  ],
+
+  "escalation_rules": [
+    { "trigger": "Risk CRITICAL 감지",      "risk": "Critical", "path": "즉시 중단 → Orch → Business Owner → Executive Sponsor", "action": "전체 Agent 중단 + 격리" },
+    { "trigger": "Risk HIGH + 미승인 실행", "risk": "High",     "path": "실행 차단 → Human 승인 게이트 → AI Architect",         "action": "승인 게이트 재진입" },
+    { "trigger": "KPI Threshold 초과",      "risk": "High",     "path": "Monitor-A → Orch → AI Architect → 72h 내 RCA",        "action": "알림 발송 + 로그" },
+    { "trigger": "Drift 감지",              "risk": "Medium",   "path": "Monitor-A → Orch → Evol-A 제안 → Governance 승인",    "action": "Evolution Loop 시작" },
+    { "trigger": "Scope 초과 시도",         "risk": "High",     "path": "즉시 차단 → Orch → AI Architect → 예외 승인 절차",    "action": "실행 차단 + 로그" },
+    { "trigger": "Audit Log 실패",          "risk": "High",     "path": "배포 차단 → Back-A 재작업 → AI Architect 재심사",     "action": "배포 파이프라인 중단" },
+    { "trigger": "Context 무단 수정 시도",  "risk": "Critical", "path": "즉시 차단 → Orch → Governance Board → Context 복원",  "action": "Context 복원 + 감사" },
+    { "trigger": "Gate SLA 타임아웃",       "risk": "Medium",   "path": "자동 리마인더 → +24h → PM 에스컬레이션",              "action": "리마인더 발송" },
+    { "trigger": "Tool 호출 3회 연속 실패", "risk": "High",     "path": "Orch 에스컬레이션 → AI Architect → 수동 점검",        "action": "Tool 일시 중단" },
+    { "trigger": "Override 발동",           "risk": "Critical", "path": "전체 Agent 중단 (3초) → Human 조치 → 24h Governance 보고","action": "즉시 전파" }
+  ],
+
+  "escalation_sla": {
+    "Critical": { "response": "1시간",       "resolution": "4시간",        "fallback": "Executive Sponsor 즉시 보고 + 시스템 격리" },
+    "High":     { "response": "4시간",       "resolution": "24시간",       "fallback": "Governance Board 보고 + 임시 운영 중단" },
+    "Medium":   { "response": "업무일 24시간","resolution": "업무일 72시간","fallback": "AI Architect 검토 + 개선 계획 수립" },
+    "Low":      { "response": "업무일 48시간","resolution": "업무일 7일",   "fallback": "정기 리뷰 회의에서 처리" }
+  },
+
+  "agent_message_spec": {
+    "description": "모든 Agent 간 메시지 표준 구조. Phase 3에서 AgentMessage 타입으로 구현.",
+    "required_fields": ["message_id","sender_agent","receiver_agent","message_type","payload","context_version","risk_level","requires_approval","created_at","trace_id"],
+    "optional_fields": ["parent_message_id","ttl_seconds"],
+    "message_types": ["REQUEST","RESPONSE","ESCALATION","NOTIFICATION"],
+    "fields": [
+      { "name": "message_id",       "type": "UUID",     "required": true,  "desc": "메시지 고유 식별자" },
+      { "name": "sender_agent",     "type": "string",   "required": true,  "desc": "발신 Agent 코드" },
+      { "name": "receiver_agent",   "type": "string",   "required": true,  "desc": "수신 Agent 코드 또는 human" },
+      { "name": "message_type",     "type": "enum",     "required": true,  "desc": "REQUEST/RESPONSE/ESCALATION/NOTIFICATION" },
+      { "name": "payload",          "type": "JSON",     "required": true,  "desc": "실제 데이터" },
+      { "name": "context_version",  "type": "string",   "required": true,  "desc": "참조한 Global Context 버전" },
+      { "name": "risk_level",       "type": "enum",     "required": true,  "desc": "LOW/MEDIUM/HIGH/CRITICAL" },
+      { "name": "requires_approval","type": "boolean",  "required": true,  "desc": "Human 승인 필요 여부" },
+      { "name": "created_at",       "type": "datetime", "required": true,  "desc": "메시지 생성 시각 (UTC)" },
+      { "name": "trace_id",         "type": "UUID",     "required": true,  "desc": "전체 Workflow 추적 ID" },
+      { "name": "parent_message_id","type": "UUID",     "required": false, "desc": "부모 메시지 ID" },
+      { "name": "ttl_seconds",      "type": "integer",  "required": false, "desc": "메시지 유효 시간(초)" }
+    ]
+  },
+
+  "interaction_rules": [
+    { "rule": "Orchestrator 경유 원칙", "desc": "Capability Agent 간 직접 통신 금지. 반드시 Orch 경유", "violation": "메시지 차단 + Orch 알림" },
+    { "rule": "trace_id 공유 필수",     "desc": "동일 요청 체인의 모든 메시지는 같은 trace_id 사용",   "violation": "추적 불가 메시지 거부" },
+    { "rule": "context_version 일치",   "desc": "메시지의 context_version이 현재 Global Context와 일치", "violation": "버전 불일치 시 재로드 후 재시도" },
+    { "rule": "risk_level 명시 의무",   "desc": "모든 메시지에 risk_level 필수 포함",                   "violation": "메시지 거부 + 로그" },
+    { "rule": "응답 SLA 준수",          "desc": "SLA 내 응답 없으면 자동 타임아웃 처리",                "violation": "Escalation 자동 트리거" },
+    { "rule": "Human 메시지 최우선",    "desc": "Human 메시지는 Agent 메시지보다 항상 우선 처리",        "violation": "해당 없음 (설계 원칙)" }
+  ],
+
+  "risk_controls": {
+    "mandatory_controls": [
+      { "item": "Authority Level 검증", "type": "Preventive", "when": "모든 Agent 실행 전",           "how": "governance.json 로드 후 level 확인" },
+      { "item": "Scope 검증",           "type": "Preventive", "when": "Tool 호출 전",                 "how": "allowed_tools 목록 대조" },
+      { "item": "Hallucination 테스트", "type": "Detective",  "when": "LLM 결과 수신 후",             "how": "Test-A 자동 검증 시나리오" },
+      { "item": "Bias 테스트",          "type": "Detective",  "when": "Persona 분석/추천 생성 후",    "how": "Test-A 편향성 체크" },
+      { "item": "Drift Detection",      "type": "Detective",  "when": "Phase 5 배포 후 (Monitor-A)",  "how": "KPI Threshold 비교" },
+      { "item": "Prompt Injection 방어","type": "Preventive", "when": "외부 입력값 수신 시",          "how": "입력값 검증 미들웨어" },
+      { "item": "Audit Log 활성화",     "type": "Detective",  "when": "모든 Agent 실행 결과",         "how": "audit_logs INSERT 확인" }
+    ]
+  },
+
+  "code_rules": {
+    "cursor_instructions": [
+      "AgentMessage 타입: message_id·trace_id·risk_level·requires_approval 필드 필수",
+      "모든 Agent 클래스: 실행 전 Global Context 로드 필수 (load_global_context())",
+      "Tool 호출 전: check_scope(tool_name) → Risk 체크 → Human 승인 (필요 시) → 실행",
+      "Escalation 함수: trigger_type + risk_level 파라미터 필수",
+      "Gate 처리: approval_requests 또는 review_requests 테이블 INSERT 후 대기",
+      "Agent 간 통신: Orch 경유 필수 — 직접 호출 금지",
+      "trace_id: 요청 시작 시 생성 후 체인 전체 공유"
+    ]
+  }
+}

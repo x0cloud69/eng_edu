@@ -1,0 +1,370 @@
+{
+  "_meta": {
+    "document": "Phase 0. SaaS Foundation — 구현 순서 및 의존성 기준",
+    "version": "v1.0",
+    "created_by": "Claude",
+    "date": "2026",
+    "description": "Implementation Guide(doc2) 기반. Cursor가 파일 생성 순서와 의존성을 지키도록 강제하는 JSON. 04_saas_stack.mdc와 함께 사용.",
+    "references": [
+      "doc1_framework.md",
+      "doc2_implementation.md",
+      "doc3_quickref.md",
+      "saas_foundation.json"
+    ],
+    "change_log": [
+      { "version": "v1.0", "date": "2026-03", "summary": "Implementation Guide 기반 초기 생성" }
+    ]
+  },
+
+  "project_structure": {
+    "root": "project-root/",
+    "backend_root": "backend/src/",
+    "frontend_root": "frontend/src/",
+    "infra_files": [
+      "docker-compose.yml",
+      "docker-compose.override.yml",
+      ".env.example",
+      ".gitignore",
+      "Makefile"
+    ]
+  },
+
+  "backend_file_order": {
+    "description": "이 순서를 반드시 지켜야 ImportError 및 순환참조가 발생하지 않는다.",
+    "steps": [
+      {
+        "step": 1,
+        "path": "backend/src/db/base.py",
+        "purpose": "DeclarativeBase 정의 — 모든 ORM 모델의 루트",
+        "depends_on": [],
+        "key_class": "Base",
+        "rule": "Alembic env.py가 Base.metadata를 독립적으로 import하기 때문에 반드시 별도 파일로 분리",
+        "forbidden": "models/base.py에 Base 통합 금지"
+      },
+      {
+        "step": 2,
+        "path": "backend/src/core/config.py",
+        "purpose": "환경변수 관리 (Pydantic BaseSettings)",
+        "depends_on": [],
+        "key_class": "Settings",
+        "key_function": "get_settings()",
+        "pattern": "@lru_cache() 싱글톤",
+        "rule": "SECRET_KEY 32자 미만 시 field_validator에서 거부"
+      },
+      {
+        "step": 3,
+        "path": "backend/src/core/logging.py",
+        "purpose": "구조화 로그 (structlog JSON)",
+        "depends_on": ["core/config.py"],
+        "key_function": "setup_logging(), get_logger()",
+        "rule": "password, token, api_key, secret 필드 자동 마스킹 필수"
+      },
+      {
+        "step": 4,
+        "path": "backend/src/db/session.py",
+        "purpose": "async engine, AsyncSession, 테넌트 컨텍스트 변수",
+        "depends_on": ["core/config.py"],
+        "key_functions": ["get_db()"],
+        "key_variable": "current_tenant_id: ContextVar[UUID | None]",
+        "rule": "asyncpg 드라이버 필수 — DATABASE_URL에 postgresql+asyncpg:// 형식"
+      },
+      {
+        "step": 5,
+        "path": "backend/src/db/migrations/",
+        "purpose": "Alembic 마이그레이션 초기화",
+        "depends_on": ["db/base.py", "db/session.py"],
+        "rule": "최초 1회만 실행: alembic init app/db/migrations",
+        "alembic_env_py_rules": [
+          "sqlalchemy.url = settings.database_url (asyncpg 제거)",
+          "target_metadata = Base.metadata",
+          "새 모델 추가 시 env.py에 import 반드시 등록"
+        ]
+      },
+      {
+        "step": 6,
+        "path": "backend/src/models/base.py",
+        "purpose": "공통 BaseModel, SoftDeleteMixin, TenantModel",
+        "depends_on": ["db/base.py"],
+        "key_classes": {
+          "BaseModel": "id(UUID v4) + created_at + updated_at",
+          "SoftDeleteMixin": "deleted_at + deleted_by + is_deleted property",
+          "TenantModel": "BaseModel + SoftDeleteMixin + organization_id + created_by"
+        },
+        "pk_rule": "반드시 UUID v4 — Integer PK 절대 금지"
+      },
+      {
+        "step": 7,
+        "path": "backend/src/schemas/base.py",
+        "purpose": "표준 API 응답 Pydantic 스키마",
+        "depends_on": [],
+        "key_classes": {
+          "ApiResponse[T]": "단건 응답 — success + data",
+          "PaginatedData[T]": "items + total + page + size + total_pages",
+          "PaginatedResponse[T]": "success + data(PaginatedData)",
+          "ErrorDetail": "code + message + request_id + timestamp",
+          "ErrorResponse": "success=false + error(ErrorDetail)"
+        }
+      },
+      {
+        "step": 8,
+        "path": "backend/src/core/exceptions.py",
+        "purpose": "커스텀 예외 클래스 계층",
+        "depends_on": [],
+        "key_classes": [
+          "AppException(HTTPException)",
+          "UnauthorizedException — ERR_AUTH_001 — 401",
+          "TokenExpiredException — ERR_AUTH_002 — 401",
+          "ForbiddenException — ERR_AUTH_004 — 403",
+          "PlanLimitException — ERR_AUTH_005 — 403",
+          "NotFoundException — ERR_DATA_001 — 404",
+          "AgentGuardrailException — ERR_AGENT_003 — 422",
+          "AgentTimeoutException — ERR_AGENT_002 — 503"
+        ]
+      },
+      {
+        "step": 9,
+        "path": "backend/src/core/security.py",
+        "purpose": "JWT 발급/검증, bcrypt, API Token 해시",
+        "depends_on": ["core/config.py"],
+        "key_functions": [
+          "hash_password(password) -> str",
+          "verify_password(plain, hashed) -> bool",
+          "create_access_token(user_id, org_id, role, plan) -> str  # 15분",
+          "create_refresh_token(user_id) -> tuple[str, str]         # 30일, (token, jti)",
+          "decode_token(token) -> dict",
+          "hash_api_token(token) -> str  # SHA-256"
+        ],
+        "bcrypt_rounds": 12
+      },
+      {
+        "step": 10,
+        "path": "backend/src/core/cache.py",
+        "purpose": "Redis 싱글톤 클라이언트 및 편의 래퍼",
+        "depends_on": ["core/config.py"],
+        "key_functions": [
+          "get_redis() -> redis.Redis",
+          "cache_get(key) -> Any | None",
+          "cache_set(key, value, ttl=300) -> None",
+          "cache_delete(key) -> None",
+          "close_redis() -> None  # lifespan 종료 시 호출"
+        ],
+        "cache_key_pattern": "{namespace}:{entity}:{id}",
+        "cache_key_examples": [
+          "login_attempts:{email}",
+          "refresh_token:{user_id}:{jti}",
+          "feature_flag:{org_id}:{flag_key}"
+        ]
+      },
+      {
+        "step": 11,
+        "path": "backend/src/utils/datetime.py",
+        "purpose": "UTC/KST 날짜 유틸",
+        "depends_on": [],
+        "key_functions": ["now_utc()", "to_kst(dt)", "format_kst(dt, fmt)"]
+      },
+      {
+        "step": 12,
+        "path": "backend/src/utils/pagination.py",
+        "purpose": "페이지네이션 파라미터 및 쿼리 헬퍼",
+        "depends_on": [],
+        "key_classes": ["PaginationParams(page, size)"],
+        "key_functions": ["paginate(session, query, params) -> dict"],
+        "constraints": { "page_min": 1, "size_max": 100 }
+      },
+      {
+        "step": 13,
+        "path": "backend/src/api/deps.py",
+        "purpose": "FastAPI 공통 의존성 — 인증, 테넌트, 역할",
+        "depends_on": ["core/security.py", "core/exceptions.py", "db/session.py"],
+        "key_classes": {
+          "TenantContext": "user_id + org_id + role + plan (dataclass)"
+        },
+        "key_functions": [
+          "get_tenant_context(token) -> TenantContext",
+          "require_role(*roles) -> Depends",
+          "require_plan(*plans) -> Depends"
+        ]
+      },
+      {
+        "step": 14,
+        "path": "backend/src/core/audit.py",
+        "purpose": "감사 로그 헬퍼",
+        "depends_on": ["db/session.py"],
+        "key_functions": ["create_audit_log(session, org_id, user_id, action, resource_type, ...)"],
+        "action_format": "{resource}.{action}  예: agent.created, user.deleted"
+      },
+      {
+        "step": 15,
+        "path": "backend/src/api/main.py",
+        "purpose": "FastAPI 앱 진입점 — 반드시 마지막",
+        "depends_on": ["core/config.py", "core/logging.py", "core/cache.py", "core/exceptions.py", "db/session.py"],
+        "required_elements": [
+          "lifespan (시작: setup_logging, 종료: engine.dispose + close_redis)",
+          "CORSMiddleware",
+          "AppException 전역 핸들러",
+          "GET /health 엔드포인트",
+          "docs_url=None (production 환경)"
+        ]
+      }
+    ]
+  },
+
+  "frontend_file_order": {
+    "description": "path alias(@/) 미설정 시 이후 모든 import가 깨진다. tsconfig.json을 반드시 먼저 작성한다.",
+    "steps": [
+      {
+        "step": 1,
+        "path": "frontend/tsconfig.json",
+        "purpose": "path alias @/ 설정 — 반드시 가장 먼저",
+        "path_aliases": {
+          "@/*": "./src/*",
+          "@/components/*": "./src/components/*",
+          "@/lib/*": "./src/lib/*",
+          "@/types/*": "./src/types/*",
+          "@/hooks/*": "./src/hooks/*",
+          "@/stores/*": "./src/stores/*",
+          "@/constants/*": "./src/constants/*"
+        }
+      },
+      {
+        "step": 2,
+        "path": "frontend/.eslintrc.json + .prettierrc",
+        "key_rules": {
+          "@typescript-eslint/no-explicit-any": "error",
+          "no-console": "warn",
+          "prefer-const": "error"
+        }
+      },
+      {
+        "step": 3,
+        "path": "frontend/next.config.ts",
+        "purpose": "rewrites 프록시 (개발 환경 CORS 우회)"
+      },
+      {
+        "step": 4,
+        "path": "frontend/src/types/api.ts",
+        "purpose": "Backend ApiResponse와 1:1 대응 TypeScript 타입",
+        "key_types": ["ApiResponse<T>", "PaginatedData<T>", "PaginatedResponse<T>", "ApiError", "ApiErrorResponse"]
+      },
+      {
+        "step": 5,
+        "path": "frontend/src/types/auth.ts",
+        "purpose": "인증 관련 타입",
+        "key_types": ["User", "Organization", "MemberContext"]
+      },
+      {
+        "step": 6,
+        "path": "frontend/src/constants/api.ts",
+        "purpose": "API 엔드포인트 상수",
+        "key_export": "ENDPOINTS (as const)"
+      },
+      {
+        "step": 7,
+        "path": "frontend/src/lib/axios.ts",
+        "purpose": "axios 인스턴스 + 인터셉터",
+        "interceptors": {
+          "request": "Zustand에서 Access Token 읽어 Authorization 헤더 첨부",
+          "response_401": "Refresh Token으로 자동 재발급 후 원래 요청 재시도",
+          "refresh_fail": "Zustand 초기화 + /login 리다이렉트"
+        },
+        "forbidden": "localStorage.getItem('access_token') 사용 금지"
+      },
+      {
+        "step": 8,
+        "path": "frontend/src/stores/authStore.ts",
+        "purpose": "Zustand 인증 상태 — 메모리 저장",
+        "state": ["accessToken: string | null", "user: User | null"],
+        "forbidden": "localStorage / sessionStorage 저장 금지"
+      },
+      {
+        "step": 9,
+        "path": "frontend/src/lib/queryClient.ts",
+        "purpose": "React Query QueryClient 설정",
+        "defaults": {
+          "staleTime": "5분 (1000*60*5)",
+          "gcTime": "10분 (1000*60*10)",
+          "retry": 1,
+          "refetchOnWindowFocus": false
+        }
+      },
+      {
+        "step": 10,
+        "path": "frontend/src/hooks/useAuth.ts",
+        "key_hooks": ["useMe()", "useLogout()"]
+      },
+      {
+        "step": 11,
+        "path": "frontend/src/hooks/usePagination.ts",
+        "key_hooks": ["usePagination(initialPage, initialSize)"]
+      },
+      {
+        "step": 12,
+        "path": "frontend/src/components/common/",
+        "files": ["LoadingSpinner.tsx", "ErrorBoundary.tsx"]
+      },
+      {
+        "step": 13,
+        "path": "frontend/src/components/ui/",
+        "files": ["Button.tsx", "Input.tsx", "Modal.tsx", "Toast.tsx", "Table.tsx", "Skeleton.tsx"]
+      },
+      {
+        "step": 14,
+        "path": "frontend/src/app/providers.tsx",
+        "purpose": "QueryClientProvider + ErrorBoundary 감싸기"
+      },
+      {
+        "step": 15,
+        "path": "frontend/src/app/layout.tsx",
+        "purpose": "루트 레이아웃 — Providers 감싸기 (반드시 마지막)"
+      }
+    ]
+  },
+
+  "domain_structure": {
+    "description": "모든 도메인은 아래 구조를 따른다",
+    "template": "backend/src/domains/{domain}/",
+    "files": [
+      { "file": "models.py",     "rule": "TenantModel 상속, Alembic env.py에 import 등록 필수" },
+      { "file": "schemas.py",    "rule": "Pydantic v2, model_validate() 사용" },
+      { "file": "repository.py", "rule": "DB CRUD만 — 비즈니스 로직 없음" },
+      { "file": "service.py",    "rule": "비즈니스 로직만 — DB 직접 접근 없음" },
+      { "file": "router.py",     "rule": "HTTP 엔드포인트만 — 서비스 호출, audit_log 기록" }
+    ],
+    "layer_rules": {
+      "router_forbidden": ["직접 DB 쿼리", "비즈니스 로직"],
+      "service_forbidden": ["직접 SQL", "직접 DB 세션 생성"],
+      "repository_forbidden": ["비즈니스 로직", "다른 도메인 서비스 호출"]
+    }
+  },
+
+  "design_decisions": {
+    "pk": "UUID v4 — Integer 절대 금지",
+    "soft_delete": "deleted_at 컬럼 — 물리 DELETE 금지",
+    "multitenancy": "Row Level — organization_id 모든 테넌트 모델에 필수",
+    "token_storage": "Access Token → Zustand 메모리 전용 (localStorage 금지)",
+    "access_token_ttl": "15분",
+    "refresh_token_ttl": "30일",
+    "bcrypt_rounds": 12,
+    "log_format": "structlog JSON — 민감정보 자동 마스킹",
+    "api_version": "/api/v1/ URL Path 방식",
+    "response_format": "ApiResponse[T] / PaginatedResponse[T] 통일",
+    "error_format": "ERR_{DOMAIN}_{3자리숫자}",
+    "event_format": "{resource}.{action}",
+    "cache_key_format": "{namespace}:{entity}:{id}"
+  },
+
+  "forbidden_patterns": [
+    { "pattern": "Column(Integer, primary_key=True)", "reason": "UUID 정책 위반", "fix": "UUID v4 사용" },
+    { "pattern": "localStorage.setItem('access_token')", "reason": "XSS 취약점", "fix": "Zustand 메모리 저장" },
+    { "pattern": "return JSONResponse({'data': ...})", "reason": "응답 포맷 불일치", "fix": "ApiResponse 사용" },
+    { "pattern": "anthropic.Anthropic().messages.create()", "reason": "LLM 추상화 위반", "fix": "LLMService 사용" },
+    { "pattern": "class Model(Base):", "reason": "표준 모델 위반", "fix": "TenantModel 또는 BaseModel 상속" },
+    { "pattern": "audit_log 없는 상태 변경", "reason": "감사 원칙 위반", "fix": "create_audit_log 추가" },
+    { "pattern": "하드코딩 API_KEY = 'sk-...'", "reason": "보안 정책 위반", "fix": "settings.openai_api_key" },
+    { "pattern": "engine.connect() 직접 호출", "reason": "DB 세션 정책 위반", "fix": "Depends(get_db)" },
+    { "pattern": "interface IUserProfile", "reason": "TypeScript I 접두사 금지", "fix": "interface UserProfile" },
+    { "pattern": "enum UserStatus { ... }", "reason": "enum 금지", "fix": "as const 패턴 사용" },
+    { "pattern": "const x: any = ...", "reason": "any 금지", "fix": "구체적 타입 지정" },
+    { "pattern": "PUT /api/v1/{resource}", "reason": "부분 수정은 PATCH", "fix": "PATCH 사용" }
+  ]
+}

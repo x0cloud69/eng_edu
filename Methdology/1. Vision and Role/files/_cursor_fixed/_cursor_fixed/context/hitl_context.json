@@ -1,0 +1,127 @@
+{
+  "_meta": {
+    "document": "1.5 Human-in-the-Loop 구조",
+    "phase": "Phase 1 - Vision & Role 정의",
+    "version": "v1.0",
+    "created_by": "KY Song",
+    "description": "Phase 3 ApprovalGate 코드 구현의 직접 기준. 3가지 HITL 패턴, DB 스키마, SLA 정의.",
+    "change_log": [
+      { "version": "v1.0", "date": "2026", "summary": "Phase 1 초기 생성" }
+    ]
+  },
+
+  "hitl_patterns": {
+    "P1": {
+      "name": "Pre-approval",
+      "description": "AI 실행 전 Human이 반드시 승인해야 진행 가능. 미승인 시 Agent는 대기 상태 유지.",
+      "timing": "실행 전",
+      "sla_hours": 24,
+      "timeout_action": "상위 승인자 자동 에스컬레이션",
+      "applies_to": ["Orch", "Back-A", "Evol-A"],
+      "db_table": "approval_requests",
+      "status_values": ["PENDING", "APPROVED", "REJECTED", "ESCALATED"]
+    },
+    "P2": {
+      "name": "On-risk",
+      "description": "실행 중 Risk Threshold 초과 또는 이상 감지 시 즉시 실행 중단 후 Human 에스컬레이션.",
+      "timing": "실행 중 이상 감지",
+      "sla_hours": 1,
+      "timeout_action": "Orch 자동 에스컬레이션 → PM 즉시 알림",
+      "applies_to": ["Orch", "Monitor-A", "Back-A", "Test-A"],
+      "db_table": "override_logs",
+      "triggers": [
+        "Risk Level CRITICAL 감지",
+        "Risk Level HIGH + 미승인 실행",
+        "KPI Threshold 초과",
+        "Drift 감지",
+        "Scope 초과 시도",
+        "Audit Log 실패"
+      ]
+    },
+    "P3": {
+      "name": "Post-review",
+      "description": "AI 작업 완료 후 Human이 결과를 검토하고 최종 확정. 미확정 산출물은 배포/적용 불가.",
+      "timing": "실행 후 산출물 확정",
+      "sla_hours": 48,
+      "timeout_action": "리마인더 발송 → +24h 후 PM 에스컬레이션",
+      "applies_to": ["UIUX-A", "Front-A", "Back-A", "Test-A", "Evol-A"],
+      "db_table": "review_requests",
+      "status_values": ["PENDING", "CONFIRMED", "REVISED", "REJECTED"]
+    }
+  },
+
+  "agent_hitl_matrix": [
+    { "agent": "Orch",     "P1": true,  "P2": true,  "P3": false, "note": "모든 Decision Gate=P1, Risk 감지=P2" },
+    { "agent": "Monitor-A","P1": false, "P2": true,  "P3": false, "note": "탐지 전용. P2 트리거 후 Orch 전달" },
+    { "agent": "Back-A",   "P1": true,  "P2": true,  "P3": true,  "note": "DB 변경=P1, 실행 중=P2, 코드=P3" },
+    { "agent": "Front-A",  "P1": false, "P2": false, "P3": true,  "note": "코드 생성 후 Human 검수(P3)" },
+    { "agent": "Test-A",   "P1": false, "P2": true,  "P3": true,  "note": "KPI 이상=P2, Evaluation Report=P3" },
+    { "agent": "Evol-A",   "P1": true,  "P2": false, "P3": true,  "note": "Context 제안 제출=P1, 제안서 검토=P3" },
+    { "agent": "UIUX-A",   "P1": false, "P2": false, "P3": true,  "note": "산출물 확정은 항상 P3" }
+  ],
+
+  "db_schema": {
+    "approval_requests": {
+      "pattern": "P1",
+      "columns": ["id", "agent_code", "action_type", "payload", "status", "requested_by", "approver", "requested_at", "resolved_at", "rejection_reason"],
+      "forbidden_ops": ["DELETE", "UPDATE status without audit"]
+    },
+    "review_requests": {
+      "pattern": "P3",
+      "columns": ["id", "agent_code", "artifact_type", "artifact_id", "status", "reviewer", "created_at", "reviewed_at", "revision_note"],
+      "forbidden_ops": ["DELETE"]
+    },
+    "override_logs": {
+      "pattern": "P2",
+      "columns": ["id", "triggered_by", "trigger_reason", "affected_agents", "snapshot_ref", "action_taken", "reported_at", "governance_notified"],
+      "forbidden_ops": ["DELETE", "UPDATE"]
+    }
+  },
+
+  "approval_gate_rules": {
+    "APPROVED":        { "action": "Agent 실행 재개",                          "log": "status=APPROVED, approver, approved_at" },
+    "REJECTED":        { "action": "Agent 실행 취소 + 사유 저장 + 알림",       "log": "status=REJECTED, rejection_reason, rejected_by" },
+    "TIMEOUT_P1":      { "action": "상위 승인자 자동 에스컬레이션",             "log": "status=ESCALATED, escalated_at, original_approver" },
+    "TIMEOUT_P3":      { "action": "리마인더 → +24h → PM 에스컬레이션",        "log": "status=REMINDER_SENT, reminder_sent_at" },
+    "OVERRIDE":        { "action": "즉시 중단 + Snapshot 저장 + 전파",         "log": "event=OVERRIDE, triggered_by, affected_agents" },
+    "AUDIT_LOG_FAIL":  { "action": "Agent 실행 차단 + 에러 알림 + 재시도 불가", "log": "status=BLOCKED, reason=AUDIT_LOG_FAILURE" }
+  },
+
+  "override": {
+    "description": "어떠한 자동화 로직도 Override를 막을 수 없다. 발동 즉시 모든 Agent 응답 의무.",
+    "response_sla_seconds": 3,
+    "triggers": [
+      "AI 출력이 명백히 잘못된 경우",
+      "예상치 못한 부작용 발생",
+      "보안 위협 감지",
+      "규제 위반 가능성 감지",
+      "Human의 직관적 판단 (사유 설명 불필요)"
+    ],
+    "procedure": [
+      "Override 발동 (UI 버튼 또는 API 직접 호출)",
+      "전체 Agent 즉시 중단 (3초 내)",
+      "상태 Snapshot 저장",
+      "audit_logs에 OVERRIDE 이벤트 기록",
+      "Human 원인 분석 및 조치",
+      "재개 또는 롤백 결정",
+      "24h 내 Governance Board 보고"
+    ]
+  },
+
+  "sla_summary": {
+    "P1_pre_approval":  { "sla": "업무일 24시간", "escalation": "AI Architect → PM → Governance Board" },
+    "P2_on_risk":       { "sla": "1시간",         "escalation": "즉시 PM / Business Owner" },
+    "P3_post_review":   { "sla": "업무일 48시간", "escalation": "Front-H/Back-H → AI Architect → PM" },
+    "override_response":{ "sla": "3초 (자동)",    "escalation": "해당 없음 (자동 처리)" }
+  },
+
+  "code_rules": {
+    "cursor_instructions": [
+      "ApprovalGate 클래스는 approval_requests 또는 review_requests 테이블에 항상 INSERT 필수",
+      "status=PENDING 상태의 요청 없이 Agent 실행 재개 금지",
+      "timeout 처리 로직은 background job으로 구현 (FastAPI lifespan 또는 celery)",
+      "Override API 엔드포인트는 인증 미들웨어 우선순위 최상위 설정",
+      "모든 Gate 결과는 audit_logs에 연계 기록 (approval_request_id FK)"
+    ]
+  }
+}

@@ -1,0 +1,299 @@
+{
+  "_meta": {
+    "document": "Phase 3. Capability 구축 — 3.3.1 Memory Spec",
+    "phase": "Phase 3 - Capability 구축",
+    "version": "v1.0",
+    "created_by": "KY Song",
+    "date": "2026",
+    "description": "Cursor AI가 Memory 관련 코드 생성 시 참조하는 기준. 4계층 Memory 구조, Retrieval Rule, DB 스키마, 접근 권한 매트릭스 정의.",
+    "depends_on": [
+      "governance.json",
+      "governance_charter.json",
+      "saas_foundation.json",
+      "phase3_context.json",
+      "tool_context.json"
+    ],
+    "change_log": [
+      { "version": "v1.0", "date": "2026", "summary": "Phase 3 Memory Spec 초기 생성" }
+    ]
+  },
+
+  "memory_architecture": {
+    "description": "4계층 Memory 구조. Agent는 MemoryStore 인터페이스 경유로만 접근. Redis/DB 직접 접근 금지.",
+    "access_rule": "Agent 코드에서 Redis/DB 직접 접근 절대 금지 → 반드시 MemoryStore 인터페이스 경유",
+    "layers": [
+      {
+        "layer": 1,
+        "name": "Context Window",
+        "type": "In-Process",
+        "storage": "LLM 토큰 컨텍스트 (Python dict / TypeScript object)",
+        "scope": "단일 LLM 호출 내",
+        "ttl": "LLM 호출 종료 시 소멸",
+        "capacity": "모델 max_tokens 한도 내 (기본 4096 tokens)",
+        "read_write": "읽기/쓰기",
+        "persistence": false,
+        "use_case": "현재 LLM 호출의 messages 배열, 즉시 필요한 컨텍스트",
+        "cursor_code_rule": "messages 배열에 직접 포함. MemoryStore 호출 불필요."
+      },
+      {
+        "layer": 2,
+        "name": "Session Memory",
+        "type": "Cache",
+        "storage": "Redis",
+        "scope": "단일 세션 (trace_id 단위)",
+        "ttl": "24시간 (TTL 기본값. Agent별 재설정 가능)",
+        "key_format": "{agent_code}:{trace_id}:{key}",
+        "read_write": "읽기/쓰기",
+        "persistence": false,
+        "use_case": "세션 내 중간 결과, 승인 대기 상태, 대화 히스토리",
+        "cursor_code_rule": "memory_store.session_get(key) / memory_store.session_set(key, value, ttl) 사용. Redis 직접 접근 금지.",
+        "examples": [
+          "approval_state:{trace_id}  ← 승인 대기 상태",
+          "agent_context:{trace_id}   ← 세션 내 컨텍스트 스냅샷",
+          "conversation:{trace_id}    ← 대화 이력"
+        ]
+      },
+      {
+        "layer": 3,
+        "name": "Episodic Memory",
+        "type": "Database",
+        "storage": "PostgreSQL (trajectory_logs 테이블)",
+        "scope": "전체 프로젝트 이력",
+        "ttl": "삭제 없음 (보관: HIGH Risk Agent 7년, 일반 1년)",
+        "key_format": "trace_id (UUID)",
+        "read_write": "쓰기 전용 (읽기는 read_logs Tool 경유)",
+        "persistence": true,
+        "use_case": "Agent 실행 궤적, KPI 측정 결과, 실패 패턴 분석, Evolution Loop 입력값",
+        "cursor_code_rule": "memory_store.episodic_log(trace_id, data) 사용. trajectory_logs 직접 INSERT 시 kpi_metrics 필드 포함 필수.",
+        "required_fields": [
+          "trace_id", "agent_code", "action", "input_summary", "output_summary",
+          "risk_level", "kpi_metrics", "failure_tagged", "created_at"
+        ]
+      },
+      {
+        "layer": 4,
+        "name": "Semantic Memory",
+        "type": "Vector Database",
+        "storage": "PostgreSQL + pgvector (agent_knowledge 테이블)",
+        "scope": "전체 프로젝트 지식베이스",
+        "ttl": "무기한 (Governance Board 승인 후 삭제만 가능)",
+        "key_format": "embedding vector (text-embedding-3-small, 1536차원)",
+        "read_write": "읽기: 자동. 쓰기: P1 Human 승인 필수",
+        "persistence": true,
+        "similarity_threshold": 0.80,
+        "use_case": "과거 성공/실패 패턴, 표준 설계 지식, Prompt 최적화 기준",
+        "cursor_code_rule": "memory_store.semantic_search(query, top_k=5) 사용. 유사도 80% 이상만 반환. 등록 시 P1 approval_requests INSERT 필수.",
+        "retrieval_rule": "similarity_score >= 0.80 인 결과만 사용. 미달 시 결과 무시."
+      }
+    ]
+  },
+
+  "memory_store_interface": {
+    "description": "MemoryStore 인터페이스 정의. Agent 코드에서 이 메서드만 사용 가능.",
+    "class": "MemoryStore",
+    "methods": [
+      {
+        "method": "session_get(key: str) -> Any | None",
+        "layer": "Session (L2)",
+        "desc": "Redis에서 세션 값 조회",
+        "rule": "key 형식: {agent_code}:{trace_id}:{key} 필수"
+      },
+      {
+        "method": "session_set(key: str, value: Any, ttl: int = 86400) -> None",
+        "layer": "Session (L2)",
+        "desc": "Redis에 세션 값 저장. 기본 TTL 24h.",
+        "rule": "key 형식 필수. ttl 최대 86400(24h). 더 긴 TTL 금지."
+      },
+      {
+        "method": "session_delete(key: str) -> None",
+        "layer": "Session (L2)",
+        "desc": "Redis 세션 값 삭제",
+        "rule": "trace_id 만료 시 자동 호출 권장"
+      },
+      {
+        "method": "episodic_log(trace_id: UUID, data: dict) -> None",
+        "layer": "Episodic (L3)",
+        "desc": "trajectory_logs 테이블에 실행 궤적 INSERT",
+        "rule": "kpi_metrics 필드 포함 필수. failure_tagged 필드 포함 필수."
+      },
+      {
+        "method": "episodic_query(filters: dict, limit: int = 100) -> list",
+        "layer": "Episodic (L3)",
+        "desc": "trajectory_logs 조회 (read_logs Tool 경유 자동 처리)",
+        "rule": "Monitor-A, Evol-A만 호출 가능. organization_id 필터 자동 포함."
+      },
+      {
+        "method": "semantic_search(query: str, top_k: int = 5) -> list[dict]",
+        "layer": "Semantic (L4)",
+        "desc": "pgvector 유사도 검색. similarity_score >= 0.80 결과만 반환.",
+        "rule": "text-embedding-3-small 임베딩 자동 생성. 미달 결과 자동 필터링."
+      },
+      {
+        "method": "semantic_register(content: str, metadata: dict) -> None",
+        "layer": "Semantic (L4)",
+        "desc": "지식베이스에 신규 항목 등록. P1 Human 승인 필수.",
+        "rule": "P1 approval_requests INSERT → APPROVED 확인 후 등록. 미승인 등록 절대 금지."
+      }
+    ],
+    "forbidden_patterns": [
+      "import redis; redis.Redis()  # 직접 Redis 클라이언트 생성 금지",
+      "session.execute(select(trajectory_logs))  # trajectory_logs 직접 쿼리 금지 → memory_store.episodic_query() 사용",
+      "session.execute(text('SELECT * FROM agent_knowledge'))  # agent_knowledge 직접 쿼리 금지 → memory_store.semantic_search() 사용"
+    ]
+  },
+
+  "db_schema": {
+    "trajectory_logs": {
+      "layer": "Episodic (L3)",
+      "table_name": "trajectory_logs",
+      "purpose": "Agent 실행 궤적 전체 기록. Evolution Loop의 입력값.",
+      "columns": [
+        { "name": "id",             "type": "UUID",          "required": true,  "desc": "고유 ID" },
+        { "name": "tenant_id",      "type": "UUID",          "required": true,  "desc": "테넌트 ID" },
+        { "name": "trace_id",       "type": "UUID",          "required": true,  "desc": "Workflow 추적 ID" },
+        { "name": "agent_code",     "type": "VARCHAR(20)",   "required": true,  "desc": "실행 Agent 코드" },
+        { "name": "action",         "type": "VARCHAR(100)",  "required": true,  "desc": "실행 액션 ({resource}.{action} 형식)" },
+        { "name": "input_summary",  "type": "TEXT",          "required": true,  "desc": "입력 데이터 요약 (PII 마스킹 필수)" },
+        { "name": "output_summary", "type": "TEXT",          "required": true,  "desc": "출력 데이터 요약" },
+        { "name": "risk_level",     "type": "VARCHAR(10)",   "required": true,  "desc": "실행 Risk Level" },
+        { "name": "kpi_metrics",    "type": "JSONB",         "required": true,  "desc": "KPI 측정값 (성공률, 응답시간 등). 빈 객체 {} 금지." },
+        { "name": "failure_tagged", "type": "BOOLEAN",       "required": true,  "desc": "실패/이상 여부 태그" },
+        { "name": "failure_reason", "type": "TEXT",          "required": false, "desc": "failure_tagged=true 시 실패 사유" },
+        { "name": "hitl_pattern",   "type": "VARCHAR(5)",    "required": false, "desc": "적용된 HITL 패턴 (P1/P2/P3)" },
+        { "name": "created_at",     "type": "TIMESTAMPTZ",   "required": true,  "desc": "기록 시각 (UTC)" }
+      ],
+      "rules": [
+        "INSERT ONLY — UPDATE/DELETE 절대 금지",
+        "kpi_metrics: 빈 {} 금지 — 최소 {'execution_time_ms': int, 'success': bool} 포함",
+        "input_summary, output_summary: PII(이름·전화·이메일) 마스킹 필수",
+        "HIGH Risk Agent 실행 보관: 7년. 일반: 1년."
+      ]
+    },
+    "agent_knowledge": {
+      "layer": "Semantic (L4)",
+      "table_name": "agent_knowledge",
+      "purpose": "pgvector 기반 지식베이스. 성공/실패 패턴, 표준 설계 지식 저장.",
+      "columns": [
+        { "name": "id",             "type": "UUID",          "required": true,  "desc": "고유 ID" },
+        { "name": "tenant_id",      "type": "UUID",          "required": true,  "desc": "테넌트 ID" },
+        { "name": "content",        "type": "TEXT",          "required": true,  "desc": "지식 원문 텍스트" },
+        { "name": "embedding",      "type": "vector(1536)",  "required": true,  "desc": "text-embedding-3-small 1536차원 벡터" },
+        { "name": "category",       "type": "VARCHAR(50)",   "required": true,  "desc": "지식 카테고리 (pattern/standard/failure)" },
+        { "name": "agent_code",     "type": "VARCHAR(20)",   "required": true,  "desc": "관련 Agent 코드" },
+        { "name": "approval_id",    "type": "UUID",          "required": true,  "desc": "P1 approval_requests.id 참조 (FK). 미승인 등록 금지." },
+        { "name": "is_active",      "type": "BOOLEAN",       "required": true,  "desc": "활성화 여부" },
+        { "name": "created_at",     "type": "TIMESTAMPTZ",   "required": true,  "desc": "등록 시각 (UTC)" }
+      ],
+      "rules": [
+        "approval_id는 NOT NULL — P1 승인 없이 INSERT 절대 금지",
+        "embedding 생성: text-embedding-3-small 모델 고정",
+        "검색 시 similarity_score >= 0.80 결과만 반환 (cosine similarity)",
+        "is_active=false: 검색 결과에서 제외",
+        "삭제 시: Governance Board 승인 + is_active=false (물리 삭제 금지)"
+      ]
+    },
+    "agent_sessions": {
+      "layer": "Session (L2) — Redis 장애 대비 백업",
+      "table_name": "agent_sessions",
+      "purpose": "Redis 장애 시 세션 복구 목적. Redis가 주 저장소.",
+      "columns": [
+        { "name": "id",          "type": "UUID",        "required": true,  "desc": "세션 ID (trace_id와 1:1)" },
+        { "name": "tenant_id",   "type": "UUID",        "required": true,  "desc": "테넌트 ID" },
+        { "name": "trace_id",    "type": "UUID",        "required": true,  "desc": "Workflow 추적 ID" },
+        { "name": "agent_code",  "type": "VARCHAR(20)", "required": true,  "desc": "Agent 코드" },
+        { "name": "state",       "type": "JSONB",       "required": true,  "desc": "세션 상태 스냅샷" },
+        { "name": "expires_at",  "type": "TIMESTAMPTZ", "required": true,  "desc": "만료 시각 (created_at + 24h)" },
+        { "name": "created_at",  "type": "TIMESTAMPTZ", "required": true,  "desc": "생성 시각" }
+      ],
+      "rules": [
+        "만료(expires_at) 지난 세션 자동 정리 (background job, 1시간 주기)",
+        "Redis 장애 시에만 이 테이블에서 복구. 정상 운영 시 Redis 우선.",
+        "state 필드: PII 마스킹 후 저장"
+      ]
+    }
+  },
+
+  "retention_policy": {
+    "description": "Memory 계층별 데이터 보관 정책",
+    "policies": [
+      { "layer": "Context Window (L1)", "retention": "LLM 호출 종료 즉시 소멸",        "delete_method": "자동 (메모리 해제)" },
+      { "layer": "Session Memory (L2)", "retention": "24시간 TTL (Redis 자동 만료)",  "delete_method": "Redis TTL 자동 만료" },
+      { "layer": "Episodic Memory (L3 - HIGH Risk Agent)", "retention": "7년",       "delete_method": "물리 삭제 금지 — is_active=false" },
+      { "layer": "Episodic Memory (L3 - 일반)",            "retention": "1년",       "delete_method": "물리 삭제 금지 — is_active=false" },
+      { "layer": "Semantic Memory (L4)", "retention": "무기한 (Governance Board 승인 후 비활성화만 가능)", "delete_method": "is_active=false (물리 삭제 절대 금지)" }
+    ]
+  },
+
+  "access_permission_matrix": {
+    "description": "Agent별 Memory 계층 접근 권한 매트릭스.",
+    "matrix": [
+      { "layer": "Context Window (L1)", "Orch": "R/W", "Monitor-A": "R/W", "Back-A": "R/W", "Front-A": "R/W", "Test-A": "R/W", "Evol-A": "R/W", "UIUX-A": "R/W" },
+      { "layer": "Session Memory (L2)", "Orch": "R/W", "Monitor-A": "R",   "Back-A": "R/W", "Front-A": "R",   "Test-A": "R/W", "Evol-A": "R",   "UIUX-A": "R"   },
+      { "layer": "Episodic Memory (L3)","Orch": "W",   "Monitor-A": "R",   "Back-A": "W",   "Front-A": "W",   "Test-A": "R/W", "Evol-A": "R",   "UIUX-A": "W"   },
+      { "layer": "Semantic Memory (L4)","Orch": "R",   "Monitor-A": "R",   "Back-A": "R/W*","Front-A": "R",   "Test-A": "R",   "Evol-A": "R/W*","UIUX-A": "R"   }
+    ],
+    "legend": { "R": "읽기만 허용", "W": "쓰기만 허용", "R/W": "읽기/쓰기 허용", "R/W*": "읽기 자유, 쓰기는 P1 승인 필수" }
+  },
+
+  "retrieval_rules": {
+    "description": "Memory 조회 시 적용하는 규칙. 모든 조회는 이 규칙을 준수한다.",
+    "rules": [
+      {
+        "layer": "Session (L2)",
+        "rule": "key 형식 {agent_code}:{trace_id}:{key} 검증 후 조회. 형식 불일치 시 조회 거부."
+      },
+      {
+        "layer": "Episodic (L3)",
+        "rule": "Monitor-A, Evol-A만 episodic_query() 호출 가능. organization_id 필터 자동 포함."
+      },
+      {
+        "layer": "Semantic (L4)",
+        "rule": "similarity_score >= 0.80 결과만 반환. 미달 결과 자동 필터. top_k=5 기본값."
+      },
+      {
+        "id": "RETR-01",
+        "name": "PII 마스킹",
+        "rule": "모든 Memory 조회 결과에서 이름·전화번호·이메일·주민번호 자동 마스킹 후 반환."
+      },
+      {
+        "id": "RETR-02",
+        "name": "Tenant 격리",
+        "rule": "모든 조회에 organization_id(tenant_id) 필터 자동 포함. 타 Tenant 데이터 접근 차단."
+      },
+      {
+        "id": "RETR-03",
+        "name": "Semantic 유사도 임계값",
+        "rule": "Semantic Memory 검색: cosine similarity >= 0.80 결과만 사용. 미달 시 결과 없음으로 처리."
+      }
+    ]
+  },
+
+  "cursor_code_rules": {
+    "description": "Cursor가 Memory 관련 코드 생성 시 반드시 준수하는 규칙",
+    "rules": [
+      "Agent 코드에서 Redis 직접 접근 금지 → memory_store.session_get/set() 경유 필수",
+      "trajectory_logs 직접 쿼리 금지 → memory_store.episodic_log/query() 경유 필수",
+      "agent_knowledge 직접 쿼리 금지 → memory_store.semantic_search/register() 경유 필수",
+      "Session Memory key: {agent_code}:{trace_id}:{key} 형식 필수",
+      "episodic_log() 호출 시 kpi_metrics 필드 반드시 포함 (빈 {} 금지)",
+      "semantic_register() 호출 시 approval_id 필드 포함 필수 (P1 승인 ID)",
+      "Semantic Memory 검색 결과: similarity_score < 0.80 결과를 코드에서 사용하는 로직 생성 금지",
+      "trajectory_logs, agent_knowledge 테이블: DELETE/UPDATE 쿼리 코드 생성 절대 금지"
+    ]
+  },
+
+  "checklist": {
+    "description": "Phase 3 Memory 구현 전 Cursor 체크리스트",
+    "items": [
+      "□ Agent 코드에서 Redis 직접 접근 없이 MemoryStore 인터페이스만 사용하는가?",
+      "□ Session Memory key 형식이 {agent_code}:{trace_id}:{key}인가?",
+      "□ trajectory_logs INSERT 시 kpi_metrics 필드가 포함되었는가?",
+      "□ trajectory_logs INSERT 시 failure_tagged 필드가 포함되었는가?",
+      "□ agent_knowledge INSERT 시 approval_id(P1 승인 ID)가 포함되었는가?",
+      "□ Semantic Memory 검색 결과 필터링 로직에 similarity_score >= 0.80이 적용되었는가?",
+      "□ Memory 조회 결과에 PII 마스킹이 적용되었는가?",
+      "□ 모든 Memory 조회에 organization_id(tenant_id) 필터가 포함되었는가?",
+      "□ trajectory_logs, agent_knowledge 테이블에 DELETE/UPDATE 쿼리가 없는가?"
+    ]
+  }
+}
